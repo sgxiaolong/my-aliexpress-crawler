@@ -87,29 +87,49 @@ export const scrapeWithTab = async (
   try {
     let apiData = null;
 
-    // 监听当前 Tab 下的 API 响应流
+    // 监听发送出去的请求
+    page.on("request", (req) => {
+      const url = req.url();
+      if (url.includes("mtop.aliexpress") || url.includes("aliexpress.com/item/")) {
+        console.log(`🌐 [HTTP请求] ${req.method()} -> ${url}`);
+      }
+    });
+
+    // 监听接收到的 HTTP 响应流
     page.on("response", async (response) => {
       const url = response.url();
+      const status = response.status();
+      if (url.includes("mtop.aliexpress") || url.includes("aliexpress.com/item/")) {
+        console.log(`📥 [HTTP响应] 状态码: ${status} | URL: ${url.slice(0, 100)}...`);
+      }
       if (url.includes("mtop.aliexpress") && url.includes("pdp")) {
         try {
           const text = await response.text();
+          console.log(`📦 [API截获] 收到 pdp 详情报文，大小: ${text?.length} 字节`);
           if (text && text.length > 1000) {
             const parsed = parseJsonp(text);
             if (parsed?.data?.result) {
               apiData = parsed;
+              console.log(`✨ [API截获] 成功从报文中解析出 JSON API 数据结构！`);
             }
           }
-        } catch {
-          // 忽略非 JSONP 响应流
+        } catch (err) {
+          console.warn(`⚠️ [API截获] 读取详情报文异常:`, err.message);
         }
       }
     });
 
     // 访问商品详情页面
-    await page.goto(`https://www.aliexpress.com/item/${id}.html`, {
-      waitUntil: "networkidle2",
+    const targetUrl = `https://www.aliexpress.com/item/${id}.html`;
+    console.log(`🚀 [页面跳转] 准备打开商品详情页面: ${targetUrl}`);
+    await page.goto(targetUrl, {
+      waitUntil: "domcontentloaded",
       timeout: timeout,
     });
+
+    const currentUrl = page.url();
+    const pageTitle = await page.title();
+    console.log(`📄 [当前页面] 标题: "${pageTitle}" | 最终有效地址: ${currentUrl}`);
 
     let data = null;
     const maxWaitTime = 15000;
@@ -118,7 +138,10 @@ export const scrapeWithTab = async (
     while (!data && Date.now() - startTime < maxWaitTime) {
       if (apiData) {
         data = extractDataFromApiResponse(apiData);
-        if (data) break;
+        if (data) {
+          console.log(`🎉 [数据提取] 从拦截 API 成功提取商品核心数据！商品标题: ${data.subject || data.title}`);
+          break;
+        }
       }
 
       const runParamsData = await page.evaluate(() => {
@@ -131,6 +154,7 @@ export const scrapeWithTab = async (
 
       if (runParamsData && Object.keys(runParamsData).length > 0) {
         data = runParamsData;
+        console.log(`🎉 [数据提取] 从 window.runParams 成功提取商品核心数据！`);
         break;
       }
 
@@ -138,8 +162,11 @@ export const scrapeWithTab = async (
     }
 
     if (!data) {
+      const htmlSnippet = await page.content();
+      console.error(`❌ [拉取失败诊断] 当前网页标题: "${pageTitle}" | URL: ${currentUrl}`);
+      console.error(`❌ [网页 HTML 片段前 300 字符]: ${htmlSnippet.slice(0, 300).replace(/\n/g, " ")}`);
       throw new Error(
-        `拉取商品 ${id} 失败：页面会话可能已过期转跳登录或遭遇人机滑块拦截 (Timeout/Login Required)`
+        `拉取商品 ${id} 失败：页面标题[${pageTitle}] 会话可能已过期转跳登录或遭遇人机滑块拦截 (Timeout/Login Required)`
       );
     }
 

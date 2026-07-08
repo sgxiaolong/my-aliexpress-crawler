@@ -6,10 +6,12 @@
   "main": "get_full_json.js",
   "scripts": {
     "start": "node get_full_json.js",
-    "interactive": "node interactive_scraper.js"
+    "interactive": "node interactive_scraper.js",
+    "serve": "node server.js"
   },
   "dependencies": {
     "aliexpress-product-scraper": "file:./libs/aliexpress-product-scraper",
+    "express": "^5.2.1",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
   }

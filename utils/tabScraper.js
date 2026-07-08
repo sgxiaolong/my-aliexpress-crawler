@@ -24,12 +24,14 @@ export const getPersistentBrowser = async () => {
 
   console.log("🚀 [BrowserPool] 正在初始化常驻 Puppeteer 浏览器实例...");
   persistentBrowser = await puppeteer.launch({
-    headless: true,
+    headless: false, // 切换为可见窗口模式，方便亲眼看到或验证滑块
+    defaultViewport: null,
     userDataDir: USER_DATA_DIR,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-blink-features=AutomationControlled",
+      "--start-maximized",
     ],
   });
 

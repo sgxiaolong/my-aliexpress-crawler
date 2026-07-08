@@ -33,6 +33,8 @@ export const getPersistentBrowser = async () => {
     ],
   });
 
+  console.log("✅ [BrowserPool] 常驻无头 Chrome 浏览器挂载 Profile 启动完毕，多标签页并发池已就绪！");
+
   // 如果启动时本地存在 cookie.txt，立即主动写入该浏览器进程
   if (fs.existsSync(COOKIE_FILE)) {
     try {

@@ -1,0 +1,5 @@
+node_modules/
+user_data_profile/
+*.json
+!package.json
+cookie.txt

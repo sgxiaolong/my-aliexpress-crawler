@@ -1,0 +1,3 @@
+[submodule "libs/aliexpress-product-scraper"]
+	path = libs/aliexpress-product-scraper
+	url = https://github.com/sudheer-ranga/aliexpress-product-scraper.git

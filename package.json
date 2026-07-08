@@ -1,0 +1,16 @@
+{
+  "name": "my-aliexpress-crawler",
+  "version": "1.0.0",
+  "description": "AliExpress product scraper application with interactive cookie support",
+  "type": "module",
+  "main": "get_full_json.js",
+  "scripts": {
+    "start": "node get_full_json.js",
+    "interactive": "node interactive_scraper.js"
+  },
+  "dependencies": {
+    "aliexpress-product-scraper": "file:./libs/aliexpress-product-scraper",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}

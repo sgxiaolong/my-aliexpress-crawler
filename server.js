@@ -15,6 +15,28 @@ const COOKIE_FILE = "./cookie.txt";
 
 app.use(express.json({ limit: "10mb" }));
 
+// 打印前端中台与后端微服务之间的 JSON HTTP 通信协议报文
+app.use((req, res, next) => {
+  if (req.path === "/api/status") return next(); // 心跳不重复刷屏
+  console.log(`\n=================== 📡 [客户端 ${req.method()} ${req.url}] ===================`);
+  if (Object.keys(req.body || {}).length > 0) {
+    console.log("📥 请求 JSON 报文 Payload:", JSON.stringify(req.body, null, 2));
+  }
+  const oldJson = res.json;
+  res.json = function (body) {
+    console.log(`📤 [后端返回 HTTP ${res.statusCode}] JSON 通信报文:`);
+    const previewBody = JSON.parse(JSON.stringify(body));
+    if (previewBody.data && typeof previewBody.data === "object") {
+      console.log(`   { success: ${previewBody.success}, mode: "${previewBody.mode}", ...产品摘要结构已封装 }`);
+    } else {
+      console.log("  ", JSON.stringify(previewBody, null, 2));
+    }
+    console.log("=========================================================================");
+    return oldJson.call(this, body);
+  };
+  next();
+});
+
 // 方案 A 并发控制器：控制同一 Chrome 浏览器内部的最大并行标签页 (Tab) 数量
 let activeTabs = 0;
 const MAX_CONCURRENT_TABS = 5; // 支持同时开启 5 个并发网页标签页拉取数据

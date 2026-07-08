@@ -6,13 +6,16 @@ import fs from "fs";
 import { get as GetReviews } from "../libs/aliexpress-product-scraper/src/reviews.js";
 import { parseJsonp, extractDataFromApiResponse } from "../libs/aliexpress-product-scraper/src/parsers.js";
 import { buildProductJson } from "../libs/aliexpress-product-scraper/src/transform.js";
-import { normalizeCookies } from "./cookieUtils.js";
+import { normalizeCookies, ALIEXPRESS_DOMAIN, CSP_DOMAIN } from "./cookieUtils.js";
 
 puppeteer.use(StealthPlugin());
 
 let persistentBrowser = null;
 const USER_DATA_DIR = "./user_data_profile";
+/** 速卖通商品详情页 Cookie 存储文件 */
 const COOKIE_FILE = "./cookie.txt";
+/** 跨境卖家中心 CSP Cookie 存储文件 */
+const CSP_COOKIE_FILE = "./cookie_csp.txt";
 
 /**
  * 获取常驻浏览器单例实例（方案 A：单实例常驻 + 多标签页并发池）
@@ -37,13 +40,20 @@ export const getPersistentBrowser = async () => {
 
   console.log("✅ [BrowserPool] 常驻无头 Chrome 浏览器挂载 Profile 启动完毕，多标签页并发池已就绪！");
 
-  // 如果启动时本地存在 cookie.txt，立即主动写入该浏览器进程
-  if (fs.existsSync(COOKIE_FILE)) {
-    try {
-      const cookieStr = fs.readFileSync(COOKIE_FILE, "utf-8").trim();
-      await injectCookieIntoBrowser(cookieStr);
-    } catch (err) {
-      console.warn("⚠️ [BrowserPool] 初始载入 cookie.txt 异常:", err.message);
+  // 启动时同时读取两套 Cookie 文件注入浏览器
+  const cookieLoadTasks = [
+    { file: COOKIE_FILE, label: "速卖通主站", domain: ALIEXPRESS_DOMAIN },
+    { file: CSP_COOKIE_FILE, label: "CSP 卖家中心", domain: CSP_DOMAIN },
+  ];
+  for (const { file, label, domain } of cookieLoadTasks) {
+    if (fs.existsSync(file)) {
+      try {
+        const cookieStr = fs.readFileSync(file, "utf-8").trim();
+        await injectCookieByDomain(cookieStr, domain);
+        console.log(`🍪 [BrowserPool] ${label} Cookie 载入完成（文件: ${file}）`);
+      } catch (err) {
+        console.warn(`⚠️ [BrowserPool] ${label} Cookie 载入异常:`, err.message);
+      }
     }
   }
 
@@ -51,22 +61,47 @@ export const getPersistentBrowser = async () => {
 };
 
 /**
- * 向已常驻运行的浏览器热注入新 Cookie 凭证（无需关浏览器）
+ * 内部通用 Cookie 注入函数（支持指定域名）
+ * @param {string} cookieStr - Cookie 字符串
+ * @param {string} domain - 目标域名
  */
-export const injectCookieIntoBrowser = async (cookieStr) => {
+const injectCookieByDomain = async (cookieStr, domain) => {
   if (!cookieStr) return 0;
   const browser = await getPersistentBrowser();
   const page = await browser.newPage();
   try {
-    const parsedCookies = normalizeCookies(cookieStr);
+    const parsedCookies = normalizeCookies(cookieStr, domain);
     if (parsedCookies.length > 0) {
       await page.setCookie(...parsedCookies);
-      console.log(`🍪 [BrowserPool] 成功向常驻浏览器会话注入 ${parsedCookies.length} 个 Cookie 字段！`);
     }
     return parsedCookies.length;
   } finally {
     await page.close();
   }
+};
+
+/**
+ * 向常驻浏览器热注入「速卖通主站 (aliexpress.com)」Cookie
+ * @param {string} cookieStr
+ */
+export const injectCookieIntoBrowser = async (cookieStr) => {
+  const count = await injectCookieByDomain(cookieStr, ALIEXPRESS_DOMAIN);
+  if (count > 0) {
+    console.log(`🍪 [BrowserPool] 成功热注入速卖通主站 Cookie ${count} 个字段！`);
+  }
+  return count;
+};
+
+/**
+ * 向常驻浏览器热注入「CSP 跨境卖家中心 (csp.aliexpress.com)」Cookie
+ * @param {string} cookieStr
+ */
+export const injectCspCookieIntoBrowser = async (cookieStr) => {
+  const count = await injectCookieByDomain(cookieStr, CSP_DOMAIN);
+  if (count > 0) {
+    console.log(`🍪 [BrowserPool] 成功热注入 CSP 卖家中心 Cookie ${count} 个字段！`);
+  }
+  return count;
 };
 
 /**
@@ -202,6 +237,116 @@ export const scrapeWithTab = async (
     if (page && !page.isClosed()) {
       await page.close();
     }
+  }
+};
+
+/**
+ * 抓取 CSP 跨境卖家中心竞价报名页面的「商品属性」键值对
+ * 策略：拦截页面加载时自动发起的 mtop.ae.price.super.link.bidding.task.query 接口
+ *       从响应 JSON 的 keyAttributes 数组中精准提取属性，避免 DOM 噪声污染
+ * @param {string} cspUrl - 完整的 CSP 竞价报名页面 URL
+ * @param {number} timeout - 超时毫秒数，默认 60000
+ * @returns {Promise<{ attrs: Record<string, string>, raw: Array }>}
+ */
+export const scrapeCspProductAttrs = async (cspUrl, timeout = 60000) => {
+  if (!cspUrl) throw new Error("请提供有效的 CSP 竞价报名页面 URL");
+
+  const browser = await getPersistentBrowser();
+  const page = await browser.newPage();
+
+  try {
+    console.log(`🏪 [CSP抓取] 正在打开竞价页: ${cspUrl}`);
+
+    /** 存放从网络拦截到的原始 keyAttributes 数组 */
+    let capturedKeyAttributes = null;
+
+    // 拦截来自 seller-acs.aliexpress.com 的竞价任务查询接口响应
+    page.on("response", async (response) => {
+      const url = response.url();
+      // 精准匹配 bidding.task.query 接口（即截图中的 Request URL）
+      if (
+        url.includes("seller-acs.aliexpress.com") &&
+        url.includes("mtop.ae.price.super.link.bidding.task.query")
+      ) {
+        try {
+          const text = await response.text();
+          console.log(`📦 [CSP-API] 截获竞价任务查询接口，响应大小: ${text.length} 字节`);
+          const json = JSON.parse(text);
+
+          // 接口返回结构: { data: { result: { ... keyAttributes: [...] } } }
+          // 或者          { result: { keyAttributes: [...] } }
+          const result =
+            json?.data?.result ||
+            json?.result ||
+            json?.data ||
+            json;
+
+          if (Array.isArray(result?.keyAttributes)) {
+            capturedKeyAttributes = result.keyAttributes;
+            console.log(`✨ [CSP-API] 成功截获 keyAttributes，共 ${capturedKeyAttributes.length} 个属性`);
+          } else {
+            // 兼容：部分接口把属性放在 itemAttributes 或 attributes 字段
+            const fallback =
+              result?.itemAttributes ||
+              result?.attributes ||
+              result?.productAttributes;
+            if (Array.isArray(fallback)) {
+              capturedKeyAttributes = fallback;
+              console.log(`✨ [CSP-API] 从 fallback 字段截获属性，共 ${capturedKeyAttributes.length} 个`);
+            } else {
+              console.warn(`⚠️ [CSP-API] 响应中未找到 keyAttributes，原始结构预览:`, JSON.stringify(result).slice(0, 300));
+            }
+          }
+        } catch (err) {
+          console.warn(`⚠️ [CSP-API] 解析响应 JSON 失败:`, err.message);
+        }
+      }
+    });
+
+    await page.goto(cspUrl, { waitUntil: "domcontentloaded", timeout });
+
+    const currentUrl = page.url();
+    const pageTitle = await page.title();
+    console.log(`📄 [CSP页面] 标题: "${pageTitle}" | URL: ${currentUrl}`);
+
+    // 等待 API 响应被截获（最多等 25 秒）
+    const waitStart = Date.now();
+    while (!capturedKeyAttributes && Date.now() - waitStart < 25000) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    if (!capturedKeyAttributes) {
+      // 截图备查
+      const screenshotPath = `./debug_csp_${Date.now()}.png`;
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      console.warn(`⚠️ [CSP抓取] 超时未截获到 keyAttributes，诊断截图: ${screenshotPath}`);
+      return { attrs: {}, raw: [] };
+    }
+
+    // 将 keyAttributes 数组转换为简洁键值对格式
+    // 原始结构: [{ key, name, valueList: [{ value, valueId }] }]
+    /** @type {Record<string, string>} */
+    const productAttrs = {};
+    for (const attr of capturedKeyAttributes) {
+      const attrName = attr.name || attr.label || String(attr.key);
+      const attrValue = attr.valueList?.[0]?.value ?? attr.value ?? "";
+      if (attrName && attrValue) {
+        productAttrs[attrName] = String(attrValue);
+      }
+    }
+
+    console.log(
+      `🎉 [CSP抓取] 商品属性提取完成，共 ${Object.keys(productAttrs).length} 个:`,
+      productAttrs
+    );
+
+    return {
+      attrs: productAttrs,
+      // 同时保留原始结构，供调用方按需使用
+      raw: capturedKeyAttributes,
+    };
+  } finally {
+    if (page && !page.isClosed()) await page.close();
   }
 };
 

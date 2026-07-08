@@ -3,8 +3,10 @@ import fs from "fs";
 import {
   scrapeWithTab,
   injectCookieIntoBrowser,
+  injectCspCookieIntoBrowser,
   getPersistentBrowser,
   closePersistentBrowser,
+  scrapeCspProductAttrs,
 } from "./utils/tabScraper.js";
 import { normalizeCookies } from "./utils/cookieUtils.js";
 
@@ -18,7 +20,7 @@ app.use(express.json({ limit: "10mb" }));
 // 打印前端中台与后端微服务之间的 JSON HTTP 通信协议报文
 app.use((req, res, next) => {
   if (req.path === "/api/status") return next(); // 心跳不重复刷屏
-  console.log(`\n=================== 📡 [客户端 ${req.method()} ${req.url}] ===================`);
+  console.log(`\n=================== 📡 [客户端 ${req.method} ${req.url}] ===================`);
   if (Object.keys(req.body || {}).length > 0) {
     console.log("📥 请求 JSON 报文 Payload:", JSON.stringify(req.body, null, 2));
   }
@@ -170,7 +172,153 @@ app.post("/api/cookie/update", async (req, res) => {
 });
 
 /**
- * 3. 健康检查与多标签池状态查询：GET /api/status
+ * Flask 竞价服务地址（内部调用，获取最新一期 CSP 竞价报名页 URL）
+ */
+const FLASK_BIDDING_API = process.env.FLASK_API_BASE || "https://smtkuajingdianshang.cn/api";
+
+/**
+ * 根据商品 ID 从 Flask 服务查询最新一期的 CSP 竞价报名页 URL
+ * @param {string} productId - 速卖通商品 ID（super_link_id）
+ * @returns {Promise<{ cspUrl: string, periodName: string, activityId: number }>}
+ */
+const fetchCspUrlByProductId = async (productId) => {
+  const apiUrl = `${FLASK_BIDDING_API}/bidding/csp-url?super_link_id=${productId}`;
+  console.log(`🔗 [CSP-URL] 正在从 Flask 查询最新竞价 URL: ${apiUrl}`);
+
+  const resp = await fetch(apiUrl, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(15000), // 15 秒超时
+  });
+
+  if (!resp.ok) {
+    throw new Error(`Flask 竞价 URL 接口返回 HTTP ${resp.status}`);
+  }
+
+  const json = await resp.json();
+
+  // Flask 统一响应结构: { code: 200, data: { csp_url, period_name, activity_id, ... } }
+  const data = json?.data || json;
+  if (!data?.csp_url) {
+    throw new Error(json?.msg || json?.message || `商品 ${productId} 未找到对应竞价活动快照`);
+  }
+
+  console.log(`✅ [CSP-URL] 查询成功 → 期数: ${data.period_name} | activity_id: ${data.activity_id}`);
+  console.log(`   CSP URL: ${data.csp_url}`);
+
+  return {
+    cspUrl: data.csp_url,
+    periodName: data.period_name,
+    activityId: data.activity_id,
+    taskId: data.task_id,
+    channelId: data.channel_id,
+  };
+};
+
+/**
+ * 3. CSP 跨境卖家中心竞价报名页「商品属性」抓取：POST /api/scrape/csp-attrs
+ *    支持两种调用方式：
+ *      方式 A（推荐）：{ "productId": "1005010707036106" }
+ *                       → 自动调 Flask 查最新一期 CSP URL → 抓取商品属性
+ *      方式 B（兼容）：{ "cspUrl": "https://csp.aliexpress.com/..." }
+ *                       → 直接用传入的 URL 抓取
+ */
+app.post("/api/scrape/csp-attrs", async (req, res) => {
+  const { productId, cspUrl: rawCspUrl, cookie } = req.body || {};
+
+  // 参数校验：productId 和 cspUrl 至少提供一个
+  if (!productId && !rawCspUrl) {
+    return res.status(400).json({
+      success: false,
+      error_code: "MISSING_PARAMS",
+      message: "请提供 productId（商品ID，自动查最新期 URL）或 cspUrl（直接传竞价报名页链接）",
+    });
+  }
+
+  // 若请求携带了临时 CSP Cookie，先热注入浏览器再抓取
+  if (cookie) {
+    await injectCspCookieIntoBrowser(cookie).catch((e) =>
+      console.warn("[CSP接口] 临时 Cookie 注入警告:", e.message)
+    );
+  }
+
+  let resolvedCspUrl = rawCspUrl;
+  let resolvedMeta = {};
+
+  // 方式 A：通过 productId 自动从 Flask 查出最新一期的 CSP URL
+  if (productId) {
+    try {
+      const result = await fetchCspUrlByProductId(String(productId).trim());
+      resolvedCspUrl = result.cspUrl;
+      resolvedMeta = {
+        period_name: result.periodName,
+        activity_id: result.activityId,
+        task_id: result.taskId,
+        channel_id: result.channelId,
+      };
+    } catch (err) {
+      console.error(`❌ [CSP接口] Flask 查询 CSP URL 失败:`, err.message);
+      return res.status(502).json({
+        success: false,
+        error_code: "FLASK_CSP_URL_FAILED",
+        message: `无法从竞价数据库查出商品 ${productId} 的 CSP URL：${err.message}`,
+        productId,
+      });
+    }
+  }
+
+  // 执行 CSP 页面商品属性抓取
+  try {
+    const { attrs, raw } = await scrapeCspProductAttrs(resolvedCspUrl);
+    return res.status(200).json({
+      success: true,
+      productId: productId || null,
+      cspUrl: resolvedCspUrl,
+      ...resolvedMeta,           // 包含 period_name / activity_id / task_id / channel_id
+      productAttrs: attrs,
+      attrs_count: Object.keys(attrs).length,
+      raw_key_attributes: raw,
+    });
+  } catch (err) {
+    console.error(`❌ [CSP接口] 抓取失败:`, err.message);
+    return res.status(500).json({
+      success: false,
+      error_code: "CSP_SCRAPE_FAILED",
+      message: err.message,
+      productId: productId || null,
+      cspUrl: resolvedCspUrl,
+    });
+  }
+});
+
+/**
+ * 2b. CSP 跨境卖家中心 Cookie 热更新：POST /api/cookie/csp/update
+ *     请求体：{ "cookie": "csp_session=xxx; ..." }
+ */
+app.post("/api/cookie/csp/update", async (req, res) => {
+  const { cookie } = req.body || {};
+
+  if (!cookie || typeof cookie !== "string" || cookie.trim().length < 10) {
+    return res.status(400).json({
+      success: false,
+      error_code: "INVALID_COOKIE_FORMAT",
+      message: "无效的 CSP Cookie 字符串，请检查格式",
+    });
+  }
+
+  fs.writeFileSync("./cookie_csp.txt", cookie.trim(), "utf-8");
+  const count = await injectCspCookieIntoBrowser(cookie.trim());
+  console.log(`✅ [API] CSP Cookie 热更新成功，共载入 ${count} 个字段`);
+
+  return res.status(200).json({
+    success: true,
+    message: `CSP 卖家中心 Cookie 热更新成功，共载入 ${count} 个字段`,
+    cookie_count: count,
+  });
+});
+
+/**
+ * 4. 健康检查与多标签池状态查询：GET /api/status
  */
 app.get("/api/status", (req, res) => {
   res.status(200).json({

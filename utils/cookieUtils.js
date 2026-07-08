@@ -1,14 +1,24 @@
 /**
  * Cookie 工具函数库
  * 提供从字符串、键值对对象及数组到标准的 Puppeteer Cookie 结构之间的相互转换
+ * 支持两套独立 Cookie 域名:
+ *   ALIEXPRESS_DOMAIN - 速卖通商品详情页 (www.aliexpress.com)
+ *   CSP_DOMAIN        - 跨境卖家中心 (csp.aliexpress.com)
  */
+
+/** 速卖通商品详情页 Cookie 域名 */
+export const ALIEXPRESS_DOMAIN = ".aliexpress.com";
+
+/** 速卖通卖家中心 CSP Cookie 域名 */
+export const CSP_DOMAIN = "csp.aliexpress.com";
 
 /**
  * 将单个键值字符串（如 "name=value"）解析为标准 Cookie 对象
  * @param {string} pairStr
+ * @param {string} domain - Cookie 所属域名，默认为 .aliexpress.com
  * @returns {object|null}
  */
-const parsePair = (pairStr) => {
+const parsePair = (pairStr, domain = ALIEXPRESS_DOMAIN) => {
   const parts = pairStr.split("=");
   if (parts.length < 2) {
     return null;
@@ -21,7 +31,7 @@ const parsePair = (pairStr) => {
   return {
     name,
     value,
-    domain: ".aliexpress.com",
+    domain,
     path: "/",
     httpOnly: false,
     secure: true,
@@ -31,9 +41,10 @@ const parsePair = (pairStr) => {
 /**
  * 将输入 Cookie（支持 Cookie Header 字符串、字典对象或 Cookie 数组）规范化为 Puppeteer setCookie 数组形式
  * @param {string|object|Array} inputCookies
+ * @param {string} domain - Cookie 所属域名，默认 .aliexpress.com；CSP 传入 "csp.aliexpress.com"
  * @returns {Array<object>}
  */
-export const normalizeCookies = (inputCookies) => {
+export const normalizeCookies = (inputCookies, domain = ALIEXPRESS_DOMAIN) => {
   if (!inputCookies) {
     return [];
   }
@@ -42,10 +53,10 @@ export const normalizeCookies = (inputCookies) => {
   if (Array.isArray(inputCookies)) {
     return inputCookies.map((item) => {
       if (typeof item === "string") {
-        return parsePair(item);
+        return parsePair(item, domain);
       }
       return {
-        domain: ".aliexpress.com",
+        domain,
         path: "/",
         httpOnly: false,
         secure: true,
@@ -58,7 +69,7 @@ export const normalizeCookies = (inputCookies) => {
   if (typeof inputCookies === "string") {
     return inputCookies
       .split(";")
-      .map((item) => parsePair(item.trim()))
+      .map((item) => parsePair(item.trim(), domain))
       .filter(Boolean);
   }
 
@@ -67,7 +78,7 @@ export const normalizeCookies = (inputCookies) => {
     return Object.entries(inputCookies).map(([name, value]) => ({
       name,
       value: String(value),
-      domain: ".aliexpress.com",
+      domain,
       path: "/",
       httpOnly: false,
       secure: true,

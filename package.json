@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "aliexpress-product-scraper": "file:./libs/aliexpress-product-scraper",
+    "cheerio": "^1.2.0",
     "express": "^5.2.1",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"

@@ -1,6 +1,11 @@
 import express from "express";
 import fs from "fs";
-import scrape from "aliexpress-product-scraper";
+import {
+  scrapeWithTab,
+  injectCookieIntoBrowser,
+  getPersistentBrowser,
+  closePersistentBrowser,
+} from "./utils/tabScraper.js";
 import { normalizeCookies } from "./utils/cookieUtils.js";
 
 const app = express();
@@ -10,9 +15,9 @@ const COOKIE_FILE = "./cookie.txt";
 
 app.use(express.json({ limit: "10mb" }));
 
-// 简单的并发控制器，防止同时发起过多无头浏览器实例导致 CPU/内存占用过高
-let activeScrapes = 0;
-const MAX_CONCURRENT_SCRAPES = 3;
+// 方案 A 并发控制器：控制同一 Chrome 浏览器内部的最大并行标签页 (Tab) 数量
+let activeTabs = 0;
+const MAX_CONCURRENT_TABS = 5; // 支持同时开启 5 个并发网页标签页拉取数据
 
 /**
  * 辅助函数：判断错误信息是否属于 Cookie 过期或触发速卖通风控拦截
@@ -33,8 +38,8 @@ const isCookieExpiredOrBlockedError = (err) => {
 };
 
 /**
- * 1. 抓取接口：支持 GET /api/scrape?id=1005007856985898 或 POST /api/scrape
- *    请求体/查询参数支持可选的 cookie 覆盖参数
+ * 1. 抓取接口：GET /api/scrape?id=1005007856985898 或 POST /api/scrape
+ *    使用“常驻浏览器 + 多标签页 (Tab) 池”实现真正的高性能并发抓取
  */
 const handleScrape = async (req, res) => {
   const id = req.query.id || req.body?.id || req.body?.productId;
@@ -48,54 +53,50 @@ const handleScrape = async (req, res) => {
     });
   }
 
-  if (activeScrapes >= MAX_CONCURRENT_SCRAPES) {
+  if (activeTabs >= MAX_CONCURRENT_TABS) {
     return res.status(429).json({
       success: false,
       error_code: "TOO_MANY_REQUESTS",
-      message: `当前并发抓取任务已达到上限 (${MAX_CONCURRENT_SCRAPES})，请稍后重试`,
+      message: `当前并发抓取网页标签页已达到上限 (${MAX_CONCURRENT_TABS} Tabs)，请稍后或缓冲重试`,
     });
   }
 
-  // 如果请求带来了临时 Cookie，更新或写入到 cookie.txt
+  // 如果请求带了新的临时 Cookie，同步注入到常驻浏览器的活动会话中
   if (customCookie && typeof customCookie === "string") {
     fs.writeFileSync(COOKIE_FILE, customCookie.trim(), "utf-8");
-    console.log(`🍪 [API] 接收到请求级临时 Cookie 并更新保存至 ${COOKIE_FILE}`);
+    await injectCookieIntoBrowser(customCookie.trim());
+    console.log(`🍪 [API] 已立即向常驻浏览器实时会话中注入最新 Cookie！`);
   }
 
-  activeScrapes++;
-  console.log(`🚀 [API] 开始抓取商品 ID: ${id} (当前正在运行抓取任务数: ${activeScrapes})`);
+  activeTabs++;
+  console.log(
+    `🚀 [API-TabPool] 打开新标签页抓取商品 ID: ${id} (当前并行 Tabs 数: ${activeTabs}/${MAX_CONCURRENT_TABS})`
+  );
 
   try {
-    const productData = await scrape(id, {
+    // 调用方案 A 多标签页抓取内核
+    const productData = await scrapeWithTab(id, {
       reviewsCount: 10,
-      puppeteerOptions: {
-        userDataDir: USER_DATA_DIR,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-blink-features=AutomationControlled",
-        ],
-      },
     });
 
-    activeScrapes--;
-    console.log(`✅ [API] 商品 ID: ${id} 抓取成功！`);
+    activeTabs--;
+    console.log(`✅ [API-TabPool] 商品 ID: ${id} 数据采集完毕，标签页已关闭！`);
 
     return res.status(200).json({
       success: true,
+      mode: "Browser-Tab-Pool (Plan A)",
       timestamp: new Date().toISOString(),
       data: productData,
     });
   } catch (err) {
-    activeScrapes--;
-    console.error(`❌ [API] 商品 ID: ${id} 抓取异常:`, err.message);
+    activeTabs--;
+    console.error(`❌ [API-TabPool] 商品 ID: ${id} 抓取失败:`, err.message);
 
-    // 智能检测 Cookie 过期或被风控拦截
     if (isCookieExpiredOrBlockedError(err)) {
       return res.status(401).json({
         success: false,
         error_code: "COOKIE_EXPIRED_OR_BLOCKED",
-        message: "速卖通会话已失效、被安全拦截或超时，请更新 Cookie 凭证后重试",
+        message: "速卖通会话已失效、触发人机验证或转跳登录，请更新 Cookie 后重试",
         action_required: "RENEW_COOKIE",
         details: err.message,
       });
@@ -113,10 +114,10 @@ app.get("/api/scrape", handleScrape);
 app.post("/api/scrape", handleScrape);
 
 /**
- * 2. Cookie 热更新接口：POST /api/cookie/update
- *    支持上层客户端随时推送新的 Cookie 会话凭证
+ * 2. Cookie 零停机热更新接口：POST /api/cookie/update
+ *    更新硬盘文件同时立刻注入已启动运行的常驻 Chrome 浏览器
  */
-app.post("/api/cookie/update", (req, res) => {
+app.post("/api/cookie/update", async (req, res) => {
   const { cookie } = req.body;
   if (!cookie || typeof cookie !== "string") {
     return res.status(400).json({
@@ -136,41 +137,47 @@ app.post("/api/cookie/update", (req, res) => {
   }
 
   fs.writeFileSync(COOKIE_FILE, cookie.trim(), "utf-8");
-  console.log(`✅ [API] Cookie 已通过 HTTP 接口成功热更新！解析出 ${normalized.length} 个字段`);
+  const count = await injectCookieIntoBrowser(cookie.trim());
+  console.log(`✅ [API] 成功完成 Cookie 热更新，已将 ${count} 个字段实时更新至常驻 Chrome 浏览器！`);
 
   return res.status(200).json({
     success: true,
-    message: `Cookie 热更新成功，共加载 ${normalized.length} 个 Cookie 字段`,
-    cookie_count: normalized.length,
+    message: `Cookie 热更新成功，常驻 Chrome 进程已立刻生效，共载入 ${count} 个字段`,
+    cookie_count: count,
   });
 });
 
 /**
- * 3. 健康检查与状态检查：GET /api/status
+ * 3. 健康检查与多标签池状态查询：GET /api/status
  */
 app.get("/api/status", (req, res) => {
-  let hasCookieFile = fs.existsSync(COOKIE_FILE);
-  let hasProfileDir = fs.existsSync(USER_DATA_DIR);
-
   res.status(200).json({
     success: true,
-    service: "AliExpress Scraper HTTP API",
+    service: "AliExpress Scraper HTTP API (Plan A - Tab Pool)",
     status: "healthy",
-    active_scrapes: activeScrapes,
-    max_concurrent: MAX_CONCURRENT_SCRAPES,
+    active_tabs: activeTabs,
+    max_concurrent_tabs: MAX_CONCURRENT_TABS,
     profile_status: {
-      cookie_file_exists: hasCookieFile,
-      user_data_profile_exists: hasProfileDir,
+      cookie_file_exists: fs.existsSync(COOKIE_FILE),
+      user_data_profile_exists: fs.existsSync(USER_DATA_DIR),
     },
   });
 });
 
-app.listen(PORT, () => {
+// 优雅关闭：当服务停止时安全关闭常驻 Chrome 进程
+process.on("SIGINT", async () => {
+  console.log("\n🛑 接收到退出信号，正在安全关闭常驻 Chrome 实例...");
+  await closePersistentBrowser();
+  process.exit(0);
+});
+
+app.listen(PORT, async () => {
   console.log("==========================================================");
-  console.log(`🌟 速卖通抓取 HTTP 微服务启动成功！监听端口: http://localhost:${PORT}`);
+  console.log(`🌟 速卖通抓取 HTTP 微服务启动成功！(方案 A：常驻单浏览器 + 多标签页并发池)`);
+  console.log(`📡 服务监听端口: http://localhost:${PORT}`);
   console.log("==========================================================");
-  console.log(`📡 抓取商品数据:   GET  http://localhost:${PORT}/api/scrape?id=<商品ID>`);
-  console.log(`📡 Cookie 热更新:  POST http://localhost:${PORT}/api/cookie/update`);
-  console.log(`📡 健康检查接口:   GET  http://localhost:${PORT}/api/status`);
-  console.log("==========================================================");
+  // 异步提前预热唤醒常驻浏览器
+  getPersistentBrowser().catch((err) =>
+    console.error("后台预热启动浏览器出现警示:", err.message)
+  );
 });

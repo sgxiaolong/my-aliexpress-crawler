@@ -7,6 +7,7 @@ import { get as GetReviews } from "../libs/aliexpress-product-scraper/src/review
 import { parseJsonp, extractDataFromApiResponse } from "../libs/aliexpress-product-scraper/src/parsers.js";
 import { buildProductJson } from "../libs/aliexpress-product-scraper/src/transform.js";
 import { normalizeCookies, ALIEXPRESS_DOMAIN, CSP_DOMAIN } from "./cookieUtils.js";
+import { getLocalChromePath } from "./chromeFinder.js";
 
 puppeteer.use(StealthPlugin());
 
@@ -26,7 +27,15 @@ export const getPersistentBrowser = async () => {
   }
 
   console.log("🚀 [BrowserPool] 正在初始化常驻 Puppeteer 浏览器实例...");
+  const chromePath = getLocalChromePath();
+  if (chromePath) {
+    console.log(`🌟 [BrowserPool] 检测到本机安装的 Google Chrome，将使用: ${chromePath}`);
+  } else {
+    console.log("ℹ️ [BrowserPool] 未检测到本机 Chrome 或未设置 CHROME_PATH，自动使用自带 Chromium");
+  }
+
   persistentBrowser = await puppeteer.launch({
+    executablePath: chromePath, // 自动使用本机 Chrome 或回退自带 Chromium
     headless: false, // 切换为可见窗口模式，方便亲眼看到或验证滑块
     defaultViewport: null,
     userDataDir: USER_DATA_DIR,
@@ -38,7 +47,7 @@ export const getPersistentBrowser = async () => {
     ],
   });
 
-  console.log("✅ [BrowserPool] 常驻无头 Chrome 浏览器挂载 Profile 启动完毕，多标签页并发池已就绪！");
+  console.log("✅ [BrowserPool] 常驻 Chrome 浏览器挂载 Profile 启动完毕，多标签页并发池已就绪！");
 
   // 启动时同时读取两套 Cookie 文件注入浏览器
   const cookieLoadTasks = [
@@ -273,29 +282,27 @@ export const scrapeCspProductAttrs = async (cspUrl, timeout = 60000) => {
           console.log(`📦 [CSP-API] 截获竞价任务查询接口，响应大小: ${text.length} 字节`);
           const json = JSON.parse(text);
 
-          // 接口返回结构: { data: { result: { ... keyAttributes: [...] } } }
-          // 或者          { result: { keyAttributes: [...] } }
-          const result =
-            json?.data?.result ||
-            json?.result ||
-            json?.data ||
-            json;
-
-          if (Array.isArray(result?.keyAttributes)) {
-            capturedKeyAttributes = result.keyAttributes;
-            console.log(`✨ [CSP-API] 成功截获 keyAttributes，共 ${capturedKeyAttributes.length} 个属性`);
-          } else {
-            // 兼容：部分接口把属性放在 itemAttributes 或 attributes 字段
-            const fallback =
-              result?.itemAttributes ||
-              result?.attributes ||
-              result?.productAttributes;
-            if (Array.isArray(fallback)) {
-              capturedKeyAttributes = fallback;
-              console.log(`✨ [CSP-API] 从 fallback 字段截获属性，共 ${capturedKeyAttributes.length} 个`);
-            } else {
-              console.warn(`⚠️ [CSP-API] 响应中未找到 keyAttributes，原始结构预览:`, JSON.stringify(result).slice(0, 300));
+          // 深度查找响应结构中的 keyAttributes / itemAttributes / attributes
+          const extractAttrs = (obj, depth = 0) => {
+            if (!obj || typeof obj !== "object" || depth > 6) return null;
+            if (Array.isArray(obj.keyAttributes) && obj.keyAttributes.length > 0) return obj.keyAttributes;
+            if (Array.isArray(obj.itemAttributes) && obj.itemAttributes.length > 0) return obj.itemAttributes;
+            if (Array.isArray(obj.attributes) && obj.attributes.length > 0) return obj.attributes;
+            for (const k of Object.keys(obj)) {
+              if (obj[k] && typeof obj[k] === "object") {
+                const found = extractAttrs(obj[k], depth + 1);
+                if (found) return found;
+              }
             }
+            return null;
+          };
+
+          const foundAttrs = extractAttrs(json);
+          if (foundAttrs) {
+            capturedKeyAttributes = foundAttrs;
+            console.log(`✨ [CSP-API] 成功提取到商品竞价属性 (keyAttributes)，共 ${capturedKeyAttributes.length} 项`);
+          } else {
+            console.warn(`⚠️ [CSP-API] 响应 JSON 中未匹配到 keyAttributes 数组，预览:`, JSON.stringify(json).slice(0, 300));
           }
         } catch (err) {
           console.warn(`⚠️ [CSP-API] 解析响应 JSON 失败:`, err.message);
@@ -309,6 +316,17 @@ export const scrapeCspProductAttrs = async (cspUrl, timeout = 60000) => {
     const pageTitle = await page.title();
     console.log(`📄 [CSP页面] 标题: "${pageTitle}" | URL: ${currentUrl}`);
 
+    // 精准鉴别 1：如果转跳到登录页、通行证或安全风控页，必定为 CSP Cookie 缺失或失效！
+    if (
+      currentUrl.includes("login.aliexpress.com") ||
+      currentUrl.includes("passport.aliexpress.com") ||
+      currentUrl.includes("punish") ||
+      pageTitle.includes("登录") ||
+      pageTitle.includes("Login")
+    ) {
+      throw new Error("CSP_COOKIE_EXPIRED: 当前 CSP 卖家中心已转跳至登录/拦截页面，Cookie 未设置或已失效");
+    }
+
     // 等待 API 响应被截获（最多等 25 秒）
     const waitStart = Date.now();
     while (!capturedKeyAttributes && Date.now() - waitStart < 25000) {
@@ -320,7 +338,7 @@ export const scrapeCspProductAttrs = async (cspUrl, timeout = 60000) => {
       const screenshotPath = `./debug_csp_${Date.now()}.png`;
       await page.screenshot({ path: screenshotPath, fullPage: true });
       console.warn(`⚠️ [CSP抓取] 超时未截获到 keyAttributes，诊断截图: ${screenshotPath}`);
-      return { attrs: {}, raw: [] };
+      throw new Error("CSP_SCRAPE_TIMEOUT: CSP 竞价页加载已达 25 秒，未截取到竞价属性查询接口的数据返回");
     }
 
     // 将 keyAttributes 数组转换为简洁键值对格式

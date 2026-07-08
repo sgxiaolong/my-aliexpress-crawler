@@ -2,6 +2,7 @@ import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import fs from "fs";
 import { normalizeCookies } from "./utils/cookieUtils.js";
+import { getLocalChromePath } from "./utils/chromeFinder.js";
 
 puppeteer.use(StealthPlugin());
 
@@ -24,7 +25,15 @@ console.log(`📁 Profile 存储目录: ${userDataDir}`);
 console.log("==================================================\n");
 
 console.log("[1/4] 正在启动桌面浏览器并挂载配置目录...");
+const chromePath = getLocalChromePath();
+if (chromePath) {
+  console.log(`🌟 检测到本机安装的 Google Chrome，将使用: ${chromePath}`);
+} else {
+  console.log("ℹ️ 未检测到本机 Chrome 或未设置 CHROME_PATH，自动使用自带 Chromium");
+}
+
 const browser = await puppeteer.launch({
+  executablePath: chromePath,
   headless: false, // 必须为 false，让用户能看到并操作浏览器
   userDataDir: userDataDir, // 挂载文件夹，页面后续所有 Cookie 都会自动保存于此
   defaultViewport: null,

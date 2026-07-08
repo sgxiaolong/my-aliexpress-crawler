@@ -98,13 +98,108 @@ const handleScrape = async (req, res) => {
   );
 
   try {
-    // 调用方案 A 多标签页抓取内核
-    const productData = await scrapeWithTab(id, {
-      reviewsCount: 10,
-    });
+    // 并行调用：1. 抓取速卖通主站详情页  2. 自动查 Flask 接口取 CSP URL 并抓取 CSP 卖家中心商品属性
+    const [productRes, cspRes] = await Promise.allSettled([
+      scrapeWithTab(id, { reviewsCount: 10 }),
+      (async () => {
+        console.log(`🔗 [API-CSP同步] 正在查询商品 ID: ${id} 对应的 Flask CSP 竞价活动...`);
+        const cspMeta = await fetchCspUrlByProductId(String(id).trim());
+        console.log(`🏪 [API-CSP同步] 成功查到期数: ${cspMeta.periodName}，正在抓取卖家中心属性...`);
+        const { attrs, raw } = await scrapeCspProductAttrs(cspMeta.cspUrl);
+        return {
+          success: true,
+          cspUrl: cspMeta.cspUrl,
+          periodName: cspMeta.periodName,
+          activityId: cspMeta.activityId,
+          taskId: cspMeta.taskId,
+          channelId: cspMeta.channelId,
+          productAttrs: attrs,
+          attrsCount: Object.keys(attrs).length,
+          rawKeyAttributes: raw,
+        };
+      })(),
+    ]);
+
+    if (productRes.status === "rejected") {
+      throw productRes.reason; // 主站详情页抓取失败则抛出主要异常
+    }
+
+    // 严格校验：必须能够同步采集到 CSP 卖家中心商品属性
+    if (
+      cspRes.status === "rejected" ||
+      !cspRes.value ||
+      !cspRes.value.attrsCount ||
+      cspRes.value.attrsCount === 0
+    ) {
+      const failReason =
+        cspRes.status === "rejected"
+          ? cspRes.reason?.message || "CSP 页面未能抓取属性"
+          : "CSP 竞价接口未返回任何具体的商品属性（属性数为 0）";
+
+      activeTabs--;
+      console.error(
+        `❌ [API-TabPool] 商品 ID: ${id} 抓取中断：未能成功获取 CSP 竞价属性！原因 -> ${failReason}`
+      );
+
+      // 1. 如果属于 CSP Cookie 失效/转跳登录/人机验证 -> 返回 401
+      if (
+        failReason.includes("CSP_COOKIE_EXPIRED") ||
+        failReason.includes("login") ||
+        failReason.includes("punish")
+      ) {
+        return res.status(401).json({
+          success: false,
+          error_code: "CSP_COOKIE_EXPIRED",
+          message: `CSP 卖家中心会话已过期或未配置，被转跳至登录/验证页面。请在控制面板贴入最新的 CSP Cookie。`,
+          action_required: "RENEW_CSP_COOKIE",
+          details: failReason,
+        });
+      }
+
+      // 2. 如果属于数据库未查到该商品报名的 CSP 快照 -> 返回 404
+      if (failReason.includes("CSP_ACTIVITY_NOT_FOUND")) {
+        return res.status(404).json({
+          success: false,
+          error_code: "CSP_ACTIVITY_NOT_FOUND",
+          message: `主站商品存在，但该商品 ID (${id}) 未查询到报名的 CSP 竞价活动快照，无法获取 CSP 属性。`,
+          details: failReason,
+        });
+      }
+
+      // 3. 如果属于抓包等待超时 -> 返回 504
+      if (failReason.includes("CSP_SCRAPE_TIMEOUT")) {
+        return res.status(504).json({
+          success: false,
+          error_code: "CSP_SCRAPE_TIMEOUT",
+          message: `打开了 CSP 竞价页，但在等待时限内接口响应数据未回传（请求超时）。`,
+          details: failReason,
+        });
+      }
+
+      // 4. 其他情况（如品类属性为 0 或解析失败） -> 返回 422
+      return res.status(422).json({
+        success: false,
+        error_code: "CSP_ATTRIBUTES_EMPTY",
+        message: `未能从该 CSP 竞价页面提取到有效的商品属性：${failReason}`,
+        details: failReason,
+      });
+    }
+
+    const productData = productRes.value;
+    const cspData = cspRes.value;
+
+    console.log(
+      `🎉 [API-TabPool] 商品 ${id} 双路采集全量成功！(主站详情 + ${cspData.attrsCount} 项 CSP 属性)`
+    );
+    productData.cspInfo = cspData;
+    productData.cspProductAttrs = cspData.productAttrs;
+    productData.attributes = {
+      ...(productData.attributes || {}),
+      ...cspData.productAttrs,
+    };
 
     activeTabs--;
-    console.log(`✅ [API-TabPool] 商品 ID: ${id} 数据采集完毕，标签页已关闭！`);
+    console.log(`✅ [API-TabPool] 商品 ID: ${id} 双路采集完毕，标签页已关闭！`);
 
     return res.status(200).json({
       success: true,
@@ -181,7 +276,7 @@ const FLASK_BIDDING_API = process.env.FLASK_API_BASE || "https://smtkuajingdians
  * @param {string} productId - 速卖通商品 ID（super_link_id）
  * @returns {Promise<{ cspUrl: string, periodName: string, activityId: number }>}
  */
-const fetchCspUrlByProductId = async (productId) => {
+async function fetchCspUrlByProductId(productId) {
   const apiUrl = `${FLASK_BIDDING_API}/bidding/csp-url?super_link_id=${productId}`;
   console.log(`🔗 [CSP-URL] 正在从 Flask 查询最新竞价 URL: ${apiUrl}`);
 
@@ -200,7 +295,7 @@ const fetchCspUrlByProductId = async (productId) => {
   // Flask 统一响应结构: { code: 200, data: { csp_url, period_name, activity_id, ... } }
   const data = json?.data || json;
   if (!data?.csp_url) {
-    throw new Error(json?.msg || json?.message || `商品 ${productId} 未找到对应竞价活动快照`);
+    throw new Error(`CSP_ACTIVITY_NOT_FOUND: ${json?.msg || json?.message || "商品 " + productId + " 未找到对应竞价活动快照"}`);
   }
 
   console.log(`✅ [CSP-URL] 查询成功 → 期数: ${data.period_name} | activity_id: ${data.activity_id}`);

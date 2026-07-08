@@ -1,5 +1,6 @@
 import scrape from "aliexpress-product-scraper";
 import fs from "fs";
+import { getLocalChromePath } from "./utils/chromeFinder.js";
 
 const productId = process.argv[2] || "1005007856985898";
 const outPath = `./full_output_${productId}.json`;
@@ -11,6 +12,7 @@ try {
   const productData = await scrape(productId, {
     reviewsCount: 10, // 抓取 10 条买家带图评价
     puppeteerOptions: {
+      executablePath: getLocalChromePath(),
       userDataDir: "./user_data_profile",
       args: [
         "--no-sandbox",

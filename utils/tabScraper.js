@@ -21,6 +21,23 @@ const COOKIE_FILE = "./cookie.txt";
 const CSP_COOKIE_FILE = "./cookie_csp.txt";
 
 /**
+ * 从速卖通原始页面/API 数据中提取可选的商品说明书。
+ * 只接受 PDF，其他媒体类型不传给店小秘上架流程。
+ */
+export const extractInstructionManual = (source) => {
+  const info = source?.data?.result?.DESC?.instructionInfo ||
+    source?.DESC?.instructionInfo ||
+    source?.productDescComponent?.instructionInfo ||
+    null;
+  if (!info?.mediaUrl || String(info.mediaType || "").toUpperCase() !== "PDF") return null;
+  return {
+    url: String(info.mediaUrl),
+    mediaType: "PDF",
+    title: info.title ? String(info.title) : null,
+  };
+};
+
+/**
  * 尝试通过 DevToolsActivePort 连接本地已经挂载该 userDataDir 运行着的 Chrome 实例
  */
 const connectToExistingBrowser = async (userDataDir) => {
@@ -270,6 +287,7 @@ export const scrapeWithTab = async (
     console.log(`📄 [当前页面] 标题: "${pageTitle}" | 最终有效地址: ${currentUrl}`);
 
     let data = null;
+    let instructionManual = null;
     const maxWaitTime = 15000;
     const startTime = Date.now();
 
@@ -277,6 +295,7 @@ export const scrapeWithTab = async (
       if (apiData) {
         data = extractDataFromApiResponse(apiData);
         if (data) {
+          instructionManual = extractInstructionManual(apiData);
           console.log(`🎉 [数据提取] 从拦截 API 成功提取商品核心数据！商品标题: ${data.subject || data.title}`);
           break;
         }
@@ -292,6 +311,7 @@ export const scrapeWithTab = async (
 
       if (runParamsData && Object.keys(runParamsData).length > 0) {
         data = runParamsData;
+        instructionManual = extractInstructionManual(runParamsData);
         console.log(`🎉 [数据提取] 从 window.runParams 成功提取商品核心数据！`);
         break;
       }
@@ -308,15 +328,22 @@ export const scrapeWithTab = async (
       );
     }
 
-    // 抓取详情描述数据
+    // 抓取详情描述数据：为避免覆盖当前主详情页的 DOM 状态，采用独立 HTTP 快速拉取策略
     const descriptionUrl = data?.productDescComponent?.descriptionUrl;
-    let descriptionDataPromise = null;
+    let descriptionDataPromise = Promise.resolve("");
     if (descriptionUrl) {
-      descriptionDataPromise = page.goto(descriptionUrl).then(async () => {
-        const descriptionPageHtml = await page.content();
-        const $ = cheerio.load(descriptionPageHtml);
-        return $("body").html();
-      });
+      descriptionDataPromise = (async () => {
+        try {
+          // 优先使用轻量级 HTTP 请求拉取描述 HTML，避免对主页面句柄二次跳转
+          const resp = await fetch(descriptionUrl, { signal: AbortSignal.timeout(10000) });
+          if (!resp.ok) return "";
+          const htmlText = await resp.text();
+          const $ = cheerio.load(htmlText);
+          return $("body").html() || htmlText;
+        } catch {
+          return "";
+        }
+      })();
     }
 
     // 并行抓取评价数据
@@ -332,7 +359,10 @@ export const scrapeWithTab = async (
       reviewsPromise,
     ]);
 
-    return buildProductJson({ data, descriptionData, reviews });
+    return {
+      ...buildProductJson({ data, descriptionData, reviews }),
+      instructionManual,
+    };
   } finally {
     // 无论是成功还是失败，抓完立刻关闭当前标签页释放内存，绝不影响主浏览器其它标签页
     if (page && !page.isClosed()) {
@@ -370,27 +400,35 @@ export const scrapeCspProductAttrs = async (cspUrl, timeout = 60000) => {
         url.includes("mtop.ae.price.super.link.bidding.task.query")
       ) {
         try {
+          // 提前过滤预检请求或非成功响应报文，避免读取空报文触发 JSON 解析报错
+          const status = response.status();
+          if (status < 200 || status >= 300) return;
+          const reqMethod = response.request().method();
+          if (reqMethod === "OPTIONS") return;
+
           const text = await response.text();
+          if (!text || text.trim().length < 5) return;
+
           console.log(`📦 [CSP-API] 截获竞价任务查询接口，响应大小: ${text.length} 字节`);
           const json = JSON.parse(text);
 
           // 深度查找响应结构中的 keyAttributes / itemAttributes / attributes
           const extractAttrs = (obj, depth = 0) => {
             if (!obj || typeof obj !== "object" || depth > 6) return null;
-            if (Array.isArray(obj.keyAttributes) && obj.keyAttributes.length > 0) return obj.keyAttributes;
-            if (Array.isArray(obj.itemAttributes) && obj.itemAttributes.length > 0) return obj.itemAttributes;
-            if (Array.isArray(obj.attributes) && obj.attributes.length > 0) return obj.attributes;
+            if (Array.isArray(obj.keyAttributes)) return obj.keyAttributes;
+            if (Array.isArray(obj.itemAttributes)) return obj.itemAttributes;
+            if (Array.isArray(obj.attributes)) return obj.attributes;
             for (const k of Object.keys(obj)) {
               if (obj[k] && typeof obj[k] === "object") {
                 const found = extractAttrs(obj[k], depth + 1);
-                if (found) return found;
+                if (found !== null) return found;
               }
             }
             return null;
           };
 
           const foundAttrs = extractAttrs(json);
-          if (foundAttrs) {
+          if (foundAttrs !== null) {
             capturedKeyAttributes = foundAttrs;
             console.log(`✨ [CSP-API] 成功提取到商品竞价属性 (keyAttributes)，共 ${capturedKeyAttributes.length} 项`);
           } else {
@@ -421,11 +459,11 @@ export const scrapeCspProductAttrs = async (cspUrl, timeout = 60000) => {
 
     // 等待 API 响应被截获（最多等 25 秒）
     const waitStart = Date.now();
-    while (!capturedKeyAttributes && Date.now() - waitStart < 25000) {
+    while (capturedKeyAttributes === null && Date.now() - waitStart < 25000) {
       await new Promise((r) => setTimeout(r, 500));
     }
 
-    if (!capturedKeyAttributes) {
+    if (capturedKeyAttributes === null) {
       // 截图备查
       const screenshotPath = `./debug_csp_${Date.now()}.png`;
       await page.screenshot({ path: screenshotPath, fullPage: true });

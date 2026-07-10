@@ -9,6 +9,7 @@ import {
   scrapeCspProductAttrs,
 } from "./utils/tabScraper.js";
 import { normalizeCookies } from "./utils/cookieUtils.js";
+import { saveScrapedProductData } from "./utils/saveData.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -39,9 +40,29 @@ app.use((req, res, next) => {
   next();
 });
 
-// 方案 A 并发控制器：控制同一 Chrome 浏览器内部的最大并行标签页 (Tab) 数量
+// 方案 A 并发排队控制器：控制同一 Chrome 浏览器内部的最大并行标签页 (Tab) 数量
 let activeTabs = 0;
 const MAX_CONCURRENT_TABS = 5; // 支持同时开启 5 个并发网页标签页拉取数据
+const tabQueue = [];
+
+const acquireTabSlot = () => {
+  if (activeTabs < MAX_CONCURRENT_TABS) {
+    activeTabs++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    tabQueue.push(resolve);
+  });
+};
+
+const releaseTabSlot = () => {
+  if (tabQueue.length > 0) {
+    const nextResolve = tabQueue.shift();
+    nextResolve();
+  } else {
+    activeTabs = Math.max(0, activeTabs - 1);
+  }
+};
 
 /**
  * 辅助函数：判断错误信息是否属于 Cookie 过期或触发速卖通风控拦截
@@ -56,14 +77,13 @@ const isCookieExpiredOrBlockedError = (err) => {
     msg.includes("punish") ||
     msg.includes("validate") ||
     msg.includes("403") ||
-    msg.includes("401") ||
-    msg.includes("timeout")
+    msg.includes("401")
   );
 };
 
 /**
  * 1. 抓取接口：GET /api/scrape?id=1005007856985898 或 POST /api/scrape
- *    使用“常驻浏览器 + 多标签页 (Tab) 池”实现真正的高性能并发抓取
+ *    使用“常驻浏览器 + 多标签页 (Tab) 池 + 异步缓冲排队队列”实现高性能并发抓取
  */
 const handleScrape = async (req, res) => {
   const id = req.query.id || req.body?.id || req.body?.productId;
@@ -77,14 +97,6 @@ const handleScrape = async (req, res) => {
     });
   }
 
-  if (activeTabs >= MAX_CONCURRENT_TABS) {
-    return res.status(429).json({
-      success: false,
-      error_code: "TOO_MANY_REQUESTS",
-      message: `当前并发抓取网页标签页已达到上限 (${MAX_CONCURRENT_TABS} Tabs)，请稍后或缓冲重试`,
-    });
-  }
-
   // 如果请求带了新的临时 Cookie，同步注入到常驻浏览器的活动会话中
   if (customCookie && typeof customCookie === "string") {
     fs.writeFileSync(COOKIE_FILE, customCookie.trim(), "utf-8");
@@ -92,7 +104,11 @@ const handleScrape = async (req, res) => {
     console.log(`🍪 [API] 已立即向常驻浏览器实时会话中注入最新 Cookie！`);
   }
 
-  activeTabs++;
+  if (activeTabs >= MAX_CONCURRENT_TABS) {
+    console.log(`⏳ [API-TabPool] 当前并发已满 (${activeTabs}/${MAX_CONCURRENT_TABS})，商品 ID: ${id} 已进入异步等待队列 (当前排队数: ${tabQueue.length + 1})`);
+  }
+  await acquireTabSlot();
+
   console.log(
     `🚀 [API-TabPool] 打开新标签页抓取商品 ID: ${id} (当前并行 Tabs 数: ${activeTabs}/${MAX_CONCURRENT_TABS})`
   );
@@ -124,19 +140,16 @@ const handleScrape = async (req, res) => {
       throw productRes.reason; // 主站详情页抓取失败则抛出主要异常
     }
 
-    // 严格校验：必须能够同步采集到 CSP 卖家中心商品属性
+    // 严格校验：确保 CSP 查询过程没有发生异常
     if (
       cspRes.status === "rejected" ||
-      !cspRes.value ||
-      !cspRes.value.attrsCount ||
-      cspRes.value.attrsCount === 0
+      !cspRes.value
     ) {
       const failReason =
         cspRes.status === "rejected"
           ? cspRes.reason?.message || "CSP 页面未能抓取属性"
-          : "CSP 竞价接口未返回任何具体的商品属性（属性数为 0）";
+          : "CSP 竞价接口数据异常";
 
-      activeTabs--;
       console.error(
         `❌ [API-TabPool] 商品 ID: ${id} 抓取中断：未能成功获取 CSP 竞价属性！原因 -> ${failReason}`
       );
@@ -198,8 +211,13 @@ const handleScrape = async (req, res) => {
       ...cspData.productAttrs,
     };
 
-    activeTabs--;
-    console.log(`✅ [API-TabPool] 商品 ID: ${id} 双路采集完毕，标签页已关闭！`);
+    console.log(`✅ [API-TabPool] 商品 ID: ${id} 双路采集完毕！`);
+
+    // 自动将双站采集完成的完整数据归档存入 data 文件夹
+    const savedPath = saveScrapedProductData(id, productData);
+    if (savedPath) {
+      console.log(`💾 [数据归档] 已存入: ${savedPath}`);
+    }
 
     return res.status(200).json({
       success: true,
@@ -208,7 +226,6 @@ const handleScrape = async (req, res) => {
       data: productData,
     });
   } catch (err) {
-    activeTabs--;
     console.error(`❌ [API-TabPool] 商品 ID: ${id} 抓取失败:`, err.message);
 
     if (isCookieExpiredOrBlockedError(err)) {
@@ -226,6 +243,8 @@ const handleScrape = async (req, res) => {
       error_code: "SCRAPE_FAILED",
       message: err.message || "抓取商品数据失败",
     });
+  } finally {
+    releaseTabSlot();
   }
 };
 

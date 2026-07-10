@@ -111,12 +111,12 @@ console.log(`✅ 已保存 ${cookies.length} 个 Cookie 字段至根目录的 co
 
 if (apiData) {
   console.log("[4/4] 保存抓取到的完整商品 JSON...");
-  fs.writeFileSync(
-    `./interactive_output_${productId}.json`,
-    JSON.stringify(apiData, null, 2),
-    "utf-8"
-  );
-  console.log(`🎉 数据已存入: interactive_output_${productId}.json`);
+  if (!fs.existsSync("./data")) {
+    fs.mkdirSync("./data", { recursive: true });
+  }
+  const savePath = `./data/${productId}.json`;
+  fs.writeFileSync(savePath, JSON.stringify(apiData, null, 2), "utf-8");
+  console.log(`🎉 数据已持久化保存至 data 文件夹: ${savePath}`);
 } else {
   console.log("⚠️ 提示: 本次会话没有捕获到 API 数据流，但会话状态与 Cookie 已成功保存！");
 }

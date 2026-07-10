@@ -3,7 +3,11 @@ import fs from "fs";
 import { getLocalChromePath } from "./utils/chromeFinder.js";
 
 const productId = process.argv[2] || "1005007856985898";
-const outPath = `./full_output_${productId}.json`;
+const outPath = `./data/${productId}.json`;
+
+if (!fs.existsSync("./data")) {
+  fs.mkdirSync("./data", { recursive: true });
+}
 
 console.log(`🚀 正在调用标准库接口抓取完整商品数据 (ID: ${productId})...`);
 
@@ -22,9 +26,9 @@ try {
     },
   });
 
-  // 保存完整的 JSON 结果到文件
+  // 保存完整的 JSON 结果到 data 文件夹
   fs.writeFileSync(outPath, JSON.stringify(productData, null, 2), "utf-8");
-  console.log(`\n🎉 🎉 🎉 成功获取并生成官方格式的完整富文本 JSON！已保存至: ${outPath}`);
+  console.log(`\n🎉 🎉 🎉 成功获取并生成官方格式的完整 JSON！已保存至 data 目录: ${outPath}`);
 
   // 打印主要结构概览信息
   console.log("\n================ [数据概要预览] ================");

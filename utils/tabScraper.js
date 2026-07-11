@@ -359,10 +359,17 @@ export const scrapeWithTab = async (
       reviewsPromise,
     ]);
 
-    return {
+    const productResult = {
       ...buildProductJson({ data, descriptionData, reviews }),
       instructionManual,
     };
+
+    // 以商品标题 (title) 是否有效非空作为主站抓取是否成功的最终判断依据
+    if (!productResult || !productResult.title || String(productResult.title).trim() === "") {
+      throw new Error(`SCRAPE_TITLE_EMPTY: 商品 ${id} 抓取主站失败，未能提取到有效的商品标题`);
+    }
+
+    return productResult;
   } finally {
     // 无论是成功还是失败，抓完立刻关闭当前标签页释放内存，绝不影响主浏览器其它标签页
     if (page && !page.isClosed()) {

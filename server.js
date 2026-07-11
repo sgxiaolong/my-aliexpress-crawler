@@ -201,6 +201,17 @@ const handleScrape = async (req, res) => {
     const productData = productRes.value;
     const cspData = cspRes.value;
 
+    // 严苛有效性校验：以标题是否有效非空来最终判断主站抓取是否成功
+    if (!productData || !productData.title || String(productData.title).trim() === "") {
+      const failMsg = `抓取验证失败：主站商品 ${id} 标题为空，可能已转跳登录或商品失效`;
+      console.error(`❌ [API-TabPool] ${failMsg}`);
+      return res.status(422).json({
+        success: false,
+        error_code: "SCRAPE_TITLE_EMPTY",
+        message: failMsg,
+      });
+    }
+
     console.log(
       `🎉 [API-TabPool] 商品 ${id} 双路采集全量成功！(主站详情 + ${cspData.attrsCount} 项 CSP 属性)`
     );
@@ -213,7 +224,7 @@ const handleScrape = async (req, res) => {
 
     console.log(`✅ [API-TabPool] 商品 ID: ${id} 双路采集完毕！`);
 
-    // 自动将双站采集完成的完整数据归档存入 data 文件夹
+    // 自动将双站采集完成的完整有效数据归档存入 data 文件夹
     const savedPath = saveScrapedProductData(id, productData);
     if (savedPath) {
       console.log(`💾 [数据归档] 已存入: ${savedPath}`);

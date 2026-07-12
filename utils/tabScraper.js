@@ -8,17 +8,20 @@ import { get as GetReviews } from "../libs/aliexpress-product-scraper/src/review
 import { parseJsonp, extractDataFromApiResponse } from "../libs/aliexpress-product-scraper/src/parsers.js";
 import { buildProductJson } from "../libs/aliexpress-product-scraper/src/transform.js";
 import { normalizeCookies, ALIEXPRESS_DOMAIN, CSP_DOMAIN } from "./cookieUtils.js";
-import { getLocalChromePath } from "./chromeFinder.js";
 
 puppeteer.use(StealthPlugin());
 
 let persistentBrowser = null;
 let browserLaunchingPromise = null;
-const USER_DATA_DIR = "./user_data_profile";
+const USER_DATA_DIR = "./user_data_profile_puppeteer";
 /** 速卖通商品详情页 Cookie 存储文件 */
 const COOKIE_FILE = "./cookie.txt";
 /** 跨境卖家中心 CSP Cookie 存储文件 */
 const CSP_COOKIE_FILE = "./cookie_csp.txt";
+const STARTUP_URLS = [
+  "https://www.aliexpress.com/item/1005012147729552.html",
+  "https://csp.aliexpress.com/m_apps/aechoice-product-bidding/biddingRegistration?biddingTaskId=84842914&biddingActivityId=101001&superLinkItemId=1005008248138189&activeKey=PRODUCT_BID&channelId=2427919",
+];
 
 /**
  * 从速卖通原始页面/API 数据中提取可选的商品说明书。
@@ -93,62 +96,18 @@ export const getPersistentBrowser = async () => {
   browserLaunchingPromise = (async () => {
     try {
       // 1. 优先检测当前 user_data_profile 是否已经由本机的 Chrome 打开过，若有则直接复用连入
-      const existingBrowser = await connectToExistingBrowser(USER_DATA_DIR);
-      if (existingBrowser && existingBrowser.isConnected()) {
-        console.log("♻️ [BrowserPool] 检测到 user_data_profile 目录已有一台活跃 Chrome 正在运行，已通过 DevToolsActivePort 无缝接入现存实例！");
-        persistentBrowser = existingBrowser;
-        return persistentBrowser;
-      }
-
       console.log("🚀 [BrowserPool] 正在初始化常驻 Puppeteer 浏览器实例...");
-      const chromePath = getLocalChromePath();
-      if (chromePath) {
-        console.log(`🌟 [BrowserPool] 检测到本机安装的 Google Chrome，将使用: ${chromePath}`);
-      } else {
-        console.log("ℹ️ [BrowserPool] 未检测到本机 Chrome 或未设置 CHROME_PATH，自动使用自带 Chromium");
-      }
-
-      try {
-        persistentBrowser = await puppeteer.launch({
-          executablePath: chromePath, // 自动使用本机 Chrome 或回退自带 Chromium
-          headless: false, // 切换为可见窗口模式，方便亲眼看到或验证滑块
-          defaultViewport: null,
-          userDataDir: USER_DATA_DIR,
-          args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled",
-            "--start-maximized",
-          ],
-        });
-      } catch (launchErr) {
-        const errMsg = (launchErr.message || String(launchErr)).toLowerCase();
-        if (errMsg.includes("already running") || errMsg.includes("userdatadir") || errMsg.includes("lock")) {
-          console.warn("⚠️ [BrowserPool] 启动受阻（目录锁拦截），正在尝试自动连入现有进程或清除失效锁文件...");
-          const retryExisting = await connectToExistingBrowser(USER_DATA_DIR);
-          if (retryExisting && retryExisting.isConnected()) {
-            console.log("♻️ [BrowserPool] 成功无缝接管正在运行中的 Chrome 实例！");
-            persistentBrowser = retryExisting;
-            return persistentBrowser;
-          }
-          // 清除上一次浏览器崩溃导致的死锁残留后自动重试
-          cleanStaleLockFiles(USER_DATA_DIR);
-          persistentBrowser = await puppeteer.launch({
-            executablePath: chromePath,
-            headless: false,
-            defaultViewport: null,
-            userDataDir: USER_DATA_DIR,
-            args: [
-              "--no-sandbox",
-              "--disable-setuid-sandbox",
-              "--disable-blink-features=AutomationControlled",
-              "--start-maximized",
-            ],
-          });
-        } else {
-          throw launchErr;
-        }
-      }
+      persistentBrowser = await puppeteer.launch({
+        headless: false,
+        defaultViewport: null,
+        userDataDir: USER_DATA_DIR,
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-blink-features=AutomationControlled",
+          "--start-maximized",
+        ],
+      });
 
       console.log("✅ [BrowserPool] 常驻 Chrome 浏览器挂载 Profile 启动完毕，多标签页并发池已就绪！");
 
@@ -167,6 +126,31 @@ export const getPersistentBrowser = async () => {
             console.warn(`⚠️ [BrowserPool] ${label} Cookie 载入异常:`, err.message);
           }
         }
+      }
+
+      // Open the requested working pages after cookies have been restored.
+      const existingPages = await persistentBrowser.pages();
+      await Promise.all(
+        existingPages.slice(STARTUP_URLS.length).map((page) => page.close())
+      );
+      const startupPages = await Promise.all(
+        STARTUP_URLS.map(async (url, index) => {
+          const page = existingPages[index] || await persistentBrowser.newPage();
+          try {
+            await page.goto(url, {
+              waitUntil: "domcontentloaded",
+              timeout: 60000,
+            });
+            console.log(`[BrowserPool] Startup page opened: ${url}`);
+          } catch (err) {
+            // Keep the tab open even when a slow page exceeds the navigation timeout.
+            console.warn(`[BrowserPool] Startup page navigation warning: ${url}`, err.message);
+          }
+          return page;
+        })
+      );
+      if (startupPages[0]) {
+        await startupPages[0].bringToFront();
       }
 
       return persistentBrowser;

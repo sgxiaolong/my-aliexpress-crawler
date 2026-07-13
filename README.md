@@ -1,6 +1,6 @@
 # AliExpress Scraper Microservice (`my-aliexpress-crawler`)
 
-生产级智能速卖通抓取微服务，采用“**主业务工程 + 官方库 Git 子模块**”分层架构，具备常驻 HTTP API 服务、零停机 Cookie 热更新、401 凭证过期智能通知以及人工交互验证辅助工具。
+生产级智能速卖通抓取微服务，采用“**主业务工程 + 本地抓取库依赖**”分层架构，具备常驻 HTTP API 服务、零停机 Cookie 热更新、401 凭证过期智能通知以及人工交互验证辅助工具。
 
 ---
 
@@ -9,7 +9,7 @@
 * [**HTTP API 接口参考文档 (`docs/API_REFERENCE.md`)**](./docs/API_REFERENCE.md)
   * 包含 `/api/scrape` 抓取规范、`/api/cookie/update` 凭证热更新规范、401 异常自愈协议及 Python / cURL 调用代码示例。
 * [**微服务架构与设计说明 (`docs/ARCHITECTURE.md`)**](./docs/ARCHITECTURE.md)
-  * 阐述主工程与开源 Submodule 零侵入协作原理、Chromium SQLite Cookie 固化机制和自动化自愈闭环架构图。
+  * 阐述主工程与本地 `file:` 抓取库依赖的协作方式、Chromium Cookie 固化机制和自动化自愈闭环架构图。
 
 ---
 

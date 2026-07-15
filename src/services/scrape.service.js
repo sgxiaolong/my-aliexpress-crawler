@@ -65,6 +65,22 @@ const mapCspFailureToHttpError = (productId, failReason) => {
   );
 };
 
+const normalizeCategoryId = (categoryId) => String(categoryId ?? "").trim();
+
+/**
+ * CSP 竞价页的末级类目对应当前活动实际要求的商品类目，应优先于商品页数据。
+ * 商品页类目仍保留为回退值和排障依据。
+ */
+export const resolveEffectiveCategory = (productCategoryId, cspCategoryId) => {
+  const sourceCategoryId = normalizeCategoryId(productCategoryId);
+  const effectiveCspCategoryId = normalizeCategoryId(cspCategoryId);
+  return {
+    categoryId: effectiveCspCategoryId || sourceCategoryId,
+    categorySource: effectiveCspCategoryId ? "csp_bidding" : "product_page",
+    sourceCategoryId: sourceCategoryId || null,
+  };
+};
+
 export async function scrapeProduct(productId, customCookie) {
   const id = String(productId || "").trim();
   if (!id) {
@@ -91,7 +107,7 @@ export async function scrapeProduct(productId, customCookie) {
       scrapeWithTab(id, { reviewsCount: 10 }),
       (async () => {
         const cspMeta = await fetchCspUrlByProductId(id);
-        const { attrs, raw } = await scrapeCspProductAttrs(cspMeta.cspUrl);
+        const { attrs, raw, categoryIdList, categoryId, categoryChain } = await scrapeCspProductAttrs(cspMeta.cspUrl);
         return {
           success: true,
           cspUrl: cspMeta.cspUrl,
@@ -102,6 +118,9 @@ export async function scrapeProduct(productId, customCookie) {
           productAttrs: attrs,
           attrsCount: Object.keys(attrs).length,
           rawKeyAttributes: raw,
+          categoryIdList: categoryIdList || [],
+          categoryId: categoryId || "",
+          categoryChain: categoryChain || "",
         };
       })(),
     ]);
@@ -129,6 +148,10 @@ export async function scrapeProduct(productId, customCookie) {
       );
     }
 
+    const resolvedCategory = resolveEffectiveCategory(productData.categoryId, cspData.categoryId);
+    productData.categoryId = resolvedCategory.categoryId;
+    productData.categorySource = resolvedCategory.categorySource;
+    productData.sourceCategoryId = resolvedCategory.sourceCategoryId;
     productData.cspInfo = cspData;
     productData.cspProductAttrs = cspData.productAttrs;
     productData.attributes = {

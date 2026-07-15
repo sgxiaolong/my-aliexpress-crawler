@@ -381,6 +381,10 @@ export const scrapeCspProductAttrs = async (cspUrl, timeout = 60000) => {
 
     /** 存放从网络拦截到的原始 keyAttributes 数组 */
     let capturedKeyAttributes = null;
+    /** CSP 竞价接口给出的完整类目链及其末级类目 */
+    let capturedCategoryIdList = [];
+    let capturedCategoryId = "";
+    let capturedCategoryChain = "";
 
     // 拦截来自 seller-acs.aliexpress.com 的竞价任务查询接口响应
     page.on("response", async (response) => {
@@ -402,6 +406,34 @@ export const scrapeCspProductAttrs = async (cspUrl, timeout = 60000) => {
 
           console.log(`📦 [CSP-API] 截获竞价任务查询接口，响应大小: ${text.length} 字节`);
           const json = JSON.parse(text);
+
+          // 此接口的标准结构是 data.data.biddingTaskInfo；保留递归兜底，
+          // 避免接口外层包装调整后丢失类目信息。
+          const extractBiddingTaskInfo = (obj, depth = 0) => {
+            if (!obj || typeof obj !== "object" || depth > 6) return null;
+            if (Array.isArray(obj.categoryIdList)) return obj;
+            for (const value of Object.values(obj)) {
+              if (value && typeof value === "object") {
+                const found = extractBiddingTaskInfo(value, depth + 1);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          const biddingTaskInfo = extractBiddingTaskInfo(json);
+          const categoryIdList = Array.isArray(biddingTaskInfo?.categoryIdList)
+            ? biddingTaskInfo.categoryIdList
+                .map((categoryId) => String(categoryId ?? "").trim())
+                .filter(Boolean)
+            : [];
+          if (categoryIdList.length) {
+            capturedCategoryIdList = categoryIdList;
+            capturedCategoryId = categoryIdList.at(-1);
+            capturedCategoryChain = String(biddingTaskInfo?.supperLinkItemCategory || "").trim();
+            console.log(
+              `🗂️ [CSP-API] 获取竞价类目：${capturedCategoryIdList.join(" > ")}（末级 ${capturedCategoryId}）`
+            );
+          }
 
           // 深度查找响应结构中的 keyAttributes / itemAttributes / attributes
           const extractAttrs = (obj, depth = 0) => {
@@ -483,6 +515,10 @@ export const scrapeCspProductAttrs = async (cspUrl, timeout = 60000) => {
       attrs: productAttrs,
       // 同时保留原始结构，供调用方按需使用
       raw: capturedKeyAttributes,
+      // CSP 竞价类目是店小秘上架的优先分类依据；categoryId 为末级类目。
+      categoryIdList: capturedCategoryIdList,
+      categoryId: capturedCategoryId,
+      categoryChain: capturedCategoryChain,
     };
   } finally {
     if (page && !page.isClosed()) await page.close();

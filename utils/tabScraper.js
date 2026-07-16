@@ -13,6 +13,7 @@ puppeteer.use(StealthPlugin());
 
 let persistentBrowser = null;
 let browserLaunchingPromise = null;
+let startupPages = { product: null, csp: null };
 const USER_DATA_DIR = "./user_data_profile_puppeteer";
 /** 速卖通商品详情页 Cookie 存储文件 */
 const COOKIE_FILE = "./cookie.txt";
@@ -97,19 +98,24 @@ export const getPersistentBrowser = async () => {
     try {
       // 1. 优先检测当前 user_data_profile 是否已经由本机的 Chrome 打开过，若有则直接复用连入
       console.log("🚀 [BrowserPool] 正在初始化常驻 Puppeteer 浏览器实例...");
-      persistentBrowser = await puppeteer.launch({
-        headless: false,
-        defaultViewport: null,
-        userDataDir: USER_DATA_DIR,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-blink-features=AutomationControlled",
-          "--start-maximized",
-        ],
-      });
-
-      console.log("✅ [BrowserPool] 常驻 Chrome 浏览器挂载 Profile 启动完毕，多标签页并发池已就绪！");
+      persistentBrowser = await connectToExistingBrowser(USER_DATA_DIR);
+      if (persistentBrowser) {
+        console.log("✅ [BrowserPool] 已复用原有 Chrome Profile，会话与已打开页面保持不变。");
+      } else {
+        persistentBrowser = await puppeteer.launch({
+          headless: false,
+          defaultViewport: null,
+          userDataDir: USER_DATA_DIR,
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-blink-features=AutomationControlled",
+            // 保持浏览器在任务栏后台，避免服务启动时抢占当前桌面焦点。
+            "--start-minimized",
+          ],
+        });
+        console.log("✅ [BrowserPool] 常驻 Chrome 浏览器挂载 Profile 启动完毕，多标签页并发池已就绪！");
+      }
 
       // 启动时同时读取两套 Cookie 文件注入浏览器
       const cookieLoadTasks = [
@@ -133,7 +139,7 @@ export const getPersistentBrowser = async () => {
       await Promise.all(
         existingPages.slice(STARTUP_URLS.length).map((page) => page.close())
       );
-      const startupPages = await Promise.all(
+      const openedStartupPages = await Promise.all(
         STARTUP_URLS.map(async (url, index) => {
           const page = existingPages[index] || await persistentBrowser.newPage();
           try {
@@ -149,9 +155,11 @@ export const getPersistentBrowser = async () => {
           return page;
         })
       );
-      if (startupPages[0]) {
-        await startupPages[0].bringToFront();
-      }
+      startupPages = {
+        product: openedStartupPages[0] || null,
+        csp: openedStartupPages[1] || null,
+      };
+      // 不主动前置任何页面；需要登录或处理验证码时由用户从任务栏打开。
 
       return persistentBrowser;
     } finally {
@@ -160,6 +168,60 @@ export const getPersistentBrowser = async () => {
   })();
 
   return await browserLaunchingPromise;
+};
+
+const inspectSessionPage = async (page, kind) => {
+  if (!page || page.isClosed()) {
+    return { status: "unknown", message: "浏览器页面尚未就绪" };
+  }
+
+  const snapshot = await page.evaluate(() => ({
+    url: location.href,
+    title: document.title || "",
+    text: (document.body?.innerText || "").slice(0, 1200),
+  })).catch(() => ({ url: page.url(), title: "", text: "" }));
+  const evidence = `${snapshot.url}\n${snapshot.title}\n${snapshot.text}`.toLowerCase();
+  const isLogin = /login\.aliexpress\.com|passport\.aliexpress\.com|\b(sign in|login)\b|登录|登陆/.test(evidence);
+  const isCaptcha = /sec\.aliexpress\.com|slider|验证码|captcha|security check|punish|validate/.test(evidence);
+
+  if (isCaptcha) {
+    return { status: "captcha_required", message: "页面需要完成验证码或安全验证", url: snapshot.url };
+  }
+  if (isLogin) {
+    return { status: "login_required", message: "页面已跳转登录，请在已打开窗口登录", url: snapshot.url };
+  }
+  if (kind === "csp" && !snapshot.url.includes("csp.aliexpress.com")) {
+    return { status: "unknown", message: "CSP 页面正在跳转或尚未加载", url: snapshot.url };
+  }
+  if (kind === "product" && !snapshot.url.includes("aliexpress.com")) {
+    return { status: "unknown", message: "商品页面正在跳转或尚未加载", url: snapshot.url };
+  }
+  return {
+    status: kind === "product" ? "ready" : "logged_in",
+    message: kind === "product" ? "商品页可采集，未检测到验证码" : "CSP 后台已登录",
+    url: snapshot.url,
+  };
+};
+
+/**
+ * 只读取服务启动时已打开的两个页面，不重新导航、不注入 Cookie。
+ * 控制台据此展示主站验证码状态与 CSP 登录状态。
+ */
+export const getAliExpressSessionStatus = async () => {
+  try {
+    await getPersistentBrowser();
+    const [product, csp] = await Promise.all([
+      inspectSessionPage(startupPages.product, "product"),
+      inspectSessionPage(startupPages.csp, "csp"),
+    ]);
+    return { product, csp };
+  } catch (error) {
+    const message = error?.message || String(error);
+    return {
+      product: { status: "offline", message },
+      csp: { status: "offline", message },
+    };
+  }
 };
 
 /**

@@ -1,9 +1,11 @@
 import fs from "fs";
 import { config } from "../config/index.js";
 import { getTabPoolStatus } from "../services/tabPool.service.js";
+import { getAliExpressSessionStatus } from "../../utils/tabScraper.js";
 
-export const statusController = (req, res) => {
+export const statusController = async (req, res) => {
   const pool = getTabPoolStatus();
+  const sessionStatus = await getAliExpressSessionStatus();
   return res.status(200).json({
     success: true,
     service: "AliExpress Scraper HTTP API",
@@ -17,5 +19,6 @@ export const statusController = (req, res) => {
       csp_cookie_file_exists: fs.existsSync(config.cspCookieFile),
       user_data_profile_exists: fs.existsSync(config.userDataDir),
     },
+    session_status: sessionStatus,
   });
 };

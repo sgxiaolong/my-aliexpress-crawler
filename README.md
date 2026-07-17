@@ -1,41 +1,11 @@
-# AliExpress Scraper Microservice (`my-aliexpress-crawler`)
+# my-aliexpress-crawler
 
-生产级智能速卖通抓取微服务，采用“**主业务工程 + 本地抓取库依赖**”分层架构，具备常驻 HTTP API 服务、零停机 Cookie 热更新、401 凭证过期智能通知以及人工交互验证辅助工具。
+速卖通商品与 CSP 信息抓取服务。生产集成由 5173 调用，通常监听 `5174`；独立运行时默认端口仍是 `3000`。
 
----
-
-## 📚 详细开发文档
-
-* [**HTTP API 接口参考文档 (`docs/API_REFERENCE.md`)**](./docs/API_REFERENCE.md)
-  * 包含 `/api/scrape` 抓取规范、`/api/cookie/update` 凭证热更新规范、401 异常自愈协议及 Python / cURL 调用代码示例。
-* [**微服务架构与设计说明 (`docs/ARCHITECTURE.md`)**](./docs/ARCHITECTURE.md)
-  * 阐述主工程与本地 `file:` 抓取库依赖的协作方式、Chromium Cookie 固化机制和自动化自愈闭环架构图。
-
----
-
-## 🚀 快速启动手册
-
-### 1. 启动 HTTP 抓取微服务（推荐用于跨系统对接）
-
-```bash
-cd d:\SmtProject\my-aliexpress-crawler
+```powershell
+npm install
+$env:PORT='5174'
 npm run serve
-# 或 node server.js
-```
-服务默认监听于 `http://localhost:3000`。
-
-### 2. 人工辅助过人机滑块与凭证固化脚本
-
-如果首次使用或需要人工划走验证码并固化 Profile 会话：
-
-```bash
-npm run interactive
-# 或 node interactive_scraper.js <商品ID>
 ```
 
-### 3. CLI 命令行单次抓取脚本
-
-```bash
-npm start
-# 或 node get_full_json.js <商品ID>
-```
+服务启动时使用系统 Chrome、独立 Profile `user_data_profile_puppeteer/` 和 CDP `9223`。浏览器最小化打开商品示例页与 CSP 示例页，便于人工登录或处理验证码，但不会抢占前台。详情见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 和 [docs/API_REFERENCE.md](docs/API_REFERENCE.md)。

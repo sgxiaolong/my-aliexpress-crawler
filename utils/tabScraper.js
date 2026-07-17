@@ -14,7 +14,15 @@ puppeteer.use(StealthPlugin());
 let persistentBrowser = null;
 let browserLaunchingPromise = null;
 let startupPages = { product: null, csp: null };
-const USER_DATA_DIR = "./user_data_profile_puppeteer";
+// 延续既有的独立采集 Profile，切换到系统 Chrome 时无需重新登录。
+const USER_DATA_DIR = path.resolve(process.env.CRAWLER_CHROME_PROFILE_DIR || "./user_data_profile_puppeteer");
+const CRAWLER_CDP_PORT = Number(process.env.CRAWLER_CDP_PORT || 9223);
+const SYSTEM_CHROME_EXECUTABLES = [
+  process.env.CRAWLER_CHROME_EXECUTABLE,
+  process.env.ProgramFiles && path.join(process.env.ProgramFiles, "Google", "Chrome", "Application", "chrome.exe"),
+  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  process.env["ProgramFiles(x86)"] && path.join(process.env["ProgramFiles(x86)"], "Google", "Chrome", "Application", "chrome.exe"),
+].filter(Boolean);
 /** 速卖通商品详情页 Cookie 存储文件 */
 const COOKIE_FILE = "./cookie.txt";
 /** 跨境卖家中心 CSP Cookie 存储文件 */
@@ -23,6 +31,9 @@ const STARTUP_URLS = [
   "https://www.aliexpress.com/item/1005012147729552.html",
   "https://csp.aliexpress.com/m_apps/aechoice-product-bidding/biddingRegistration?biddingTaskId=84842914&biddingActivityId=101001&superLinkItemId=1005008248138189&activeKey=PRODUCT_BID&channelId=2427919",
 ];
+
+const resolveSystemChromeExecutable = () =>
+  SYSTEM_CHROME_EXECUTABLES.find((candidate) => fs.existsSync(candidate)) || null;
 
 /**
  * 从速卖通原始页面/API 数据中提取可选的商品说明书。
@@ -51,7 +62,7 @@ const connectToExistingBrowser = async (userDataDir) => {
       const lines = fs.readFileSync(portFile, "utf-8").trim().split(/\r?\n/);
       const port = lines[0]?.trim();
       const wsPath = lines[1]?.trim();
-      if (port && wsPath) {
+      if (port && wsPath && Number(port) === CRAWLER_CDP_PORT) {
         const wsEndpoint = `ws://127.0.0.1:${port}${wsPath}`;
         const browser = await puppeteer.connect({
           browserWSEndpoint: wsEndpoint,
@@ -96,25 +107,34 @@ export const getPersistentBrowser = async () => {
 
   browserLaunchingPromise = (async () => {
     try {
-      // 1. 优先检测当前 user_data_profile 是否已经由本机的 Chrome 打开过，若有则直接复用连入
+      // 1. 优先连接同一独立 Profile 的系统 Chrome（固定 CDP 9223），若有则直接复用。
       console.log("🚀 [BrowserPool] 正在初始化常驻 Puppeteer 浏览器实例...");
       persistentBrowser = await connectToExistingBrowser(USER_DATA_DIR);
       if (persistentBrowser) {
         console.log("✅ [BrowserPool] 已复用原有 Chrome Profile，会话与已打开页面保持不变。");
       } else {
+        const executablePath = resolveSystemChromeExecutable();
+        if (!executablePath) {
+          throw new Error("未找到系统 Chrome，请设置 CRAWLER_CHROME_EXECUTABLE 指向 chrome.exe");
+        }
         persistentBrowser = await puppeteer.launch({
           headless: false,
           defaultViewport: null,
           userDataDir: USER_DATA_DIR,
+          executablePath,
+          // Puppeteer 默认会随机占用调试端口；这里改为固定 9223，便于服务健康检查与人工排障。
+          ignoreDefaultArgs: ["--remote-debugging-port=0"],
           args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-blink-features=AutomationControlled",
+            "--remote-debugging-address=127.0.0.1",
+            `--remote-debugging-port=${CRAWLER_CDP_PORT}`,
             // 保持浏览器在任务栏后台，避免服务启动时抢占当前桌面焦点。
             "--start-minimized",
           ],
         });
-        console.log("✅ [BrowserPool] 常驻 Chrome 浏览器挂载 Profile 启动完毕，多标签页并发池已就绪！");
+        console.log(`✅ [BrowserPool] 系统 Chrome 已以 CDP ${CRAWLER_CDP_PORT} 挂载独立 Profile 启动，多标签页并发池已就绪！`);
       }
 
       // 启动时同时读取两套 Cookie 文件注入浏览器

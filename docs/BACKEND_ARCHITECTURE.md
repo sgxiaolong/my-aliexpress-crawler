@@ -1,106 +1,18 @@
-# Backend Architecture
-
-## Role
-
-`my-aliexpress-crawler` is a scrape executor. It owns browser automation and
-returns product JSON. It does not own batch task history, product JSON storage,
-upload workflow, or controller UI state.
-
-The controller project is responsible for persistence and orchestration.
-
-## Directory Layout
+# 爬虫后端架构
 
 ```text
-server.js
-src/
-  app.js
-  config/
-    index.js
-  controllers/
-    cookie.controller.js
-    scrape.controller.js
-    status.controller.js
-  middleware/
-    jsonTrafficLogger.js
-  routes/
-    cookie.routes.js
-    index.js
-    scrape.routes.js
-    status.routes.js
-  services/
-    cspUrl.service.js
-    scrape.service.js
-    tabPool.service.js
-  utils/
-    httpError.js
-utils/
-  tabScraper.js
-  cookieUtils.js
+Express /api
+  ├─ status routes：浏览器、商品页和 CSP 会话状态
+  ├─ scrape routes：商品抓取、CSP 属性/活动信息
+  └─ cookie routes：兼容性 Cookie 更新接口
+                 │
+                 ▼
+puppeteer-extra → 系统 Chrome (Profile + CDP 9223)
+                 │
+                 ├─ 商品页 DOM、详情 API、描述和评论
+                 └─ CSP 页面/API（含拦截的竞价信息）
 ```
 
-## Layer Rules
+`tabScraper.js` 负责常驻浏览器单例、系统 Chrome 探测/启动、两套会话恢复和启动页面。抓取结果返回给调用方；业务商品 JSON 由 5173 保存，不由本服务写入 `crawler-upload-controller/storage/`。
 
-| Layer | Responsibility |
-| --- | --- |
-| `server.js` | Start Express, warm Puppeteer, graceful shutdown |
-| `src/app.js` | Build Express app and mount `/api` routes |
-| `routes` | URL and HTTP method mapping only |
-| `controllers` | Read request params, return HTTP responses |
-| `services` | Browser scraping, Cookie injection, CSP URL lookup |
-| `utils/tabScraper.js` | Low-level Puppeteer implementation |
-
-## API Surface
-
-```http
-GET  /api/status
-GET  /api/scrape?id=<productId>
-POST /api/scrape
-POST /api/scrape/csp-attrs
-POST /api/cookie/update
-POST /api/cookie/csp/update
-```
-
-Removed from this service:
-
-```http
-POST   /api/jobs
-GET    /api/jobs
-GET    /api/jobs/:jobId
-DELETE /api/jobs
-```
-
-Those endpoints now belong to `crawler-upload-controller`.
-
-## Data Ownership
-
-This service may keep technical runtime state:
-
-- `user_data_profile_puppeteer/`: Puppeteer Chrome profile and login state.
-- `cookie.txt`: AliExpress cookie backup.
-- `cookie_csp.txt`: CSP seller-center cookie backup.
-
-It should not save product JSON as business data. Product JSON persistence is
-owned by `crawler-upload-controller/storage/products`.
-
-## Request Flow
-
-```text
-crawler-upload-controller
-  -> GET /api/scrape?id=...
-my-aliexpress-crawler
-  -> Puppeteer AliExpress page/API
-  -> Flask CSP URL API
-  -> Puppeteer CSP page/API
-  <- standard product JSON
-```
-
-The returned product JSON already includes merged `cspInfo`,
-`cspProductAttrs`, and `attributes`.
-
-## Start
-
-```bash
-npm run serve
-```
-
-Default port: `3000`.
+默认端口为 `3000`，但项目联调使用 `PORT=5174`，5173 的默认 `CRAWLER_BASE_URL` 也指向 `http://127.0.0.1:5174`。

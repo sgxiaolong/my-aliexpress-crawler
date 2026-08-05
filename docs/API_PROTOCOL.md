@@ -1,100 +1,13 @@
-# AliExpress Scraper 中台客户端 (5174/5173) 与 后端微服务 (3000) 通信协议规范
+# 5173 与爬虫服务协议
 
-本文档详述前端可视化控制中台 (`crawler-upload-controller`) 与后端爬虫接口微服务 (`my-aliexpress-crawler`) 之间的 **HTTP JSON RESTful 通信报文协议**。
+5173 默认请求 `http://127.0.0.1:5174/api/*`。创建采集任务仅写 5173 本地工作流；随后由手动操作或 workflow runner 调用爬虫。
 
----
-
-## 1. 抓取商品数据接口 (Scrape API)
-
-* **接口路径**：`GET /api/scrape?id={productId}` 或 `POST /api/scrape`
-* **协议类型**：HTTP / RESTful JSON
-* **支持方法**：GET, POST
-
-### 请求协议报文 (Request Payload - POST JSON)
-```json
-{
-  "id": "1005007856985898",
-  "cookie": "可选传入实时临时 Cookie 字符串"
-}
+```text
+5173 创建任务 → storage/products/<id>/workflow.json
+5173 发起采集 → 5174 /api/scrape
+5174 返回数据 → 5173 写 item.json / 更新 scrape 状态
 ```
 
-### 响应协议报文 - 抓取成功 (HTTP 200 OK)
-```json
-{
-  "success": true,
-  "mode": "Browser-Tab-Pool (Plan A)",
-  "timestamp": "2026-07-08T18:00:00.000Z",
-  "data": {
-    "productId": "1005007856985898",
-    "title": "速卖通商品名称...",
-    "price": "US $12.99",
-    "originalPrice": "US $25.98",
-    "currency": "USD",
-    "mainImage": "https://ae01.alicdn.com/kf/...",
-    "skuList": [
-      {
-        "skuId": "120000301...",
-        "skuName": "Color: Black",
-        "price": "US $12.99",
-        "stock": 100
-      }
-    ],
-    "reviews": []
-  }
-}
-```
+采集失败会由 5173 记录为阶段错误，不会把商品 JSON 写到爬虫项目。服务因登录、验证码或风控无法抓取时，应先在 5174 的独立 Chrome Profile 内恢复会话后重试。
 
-### 响应协议报文 - 会话失效/滑块拦截 (HTTP 401 Unauthorized)
-```json
-{
-  "success": false,
-  "error_code": "COOKIE_EXPIRED_OR_BLOCKED",
-  "message": "速卖通会话已失效、触发人机验证或转跳登录，请更新 Cookie 后重试",
-  "action_required": "RENEW_COOKIE",
-  "details": "拉取商品 1005007856985898 失败：页面标题[] 会话可能已过期转跳登录或遭遇人机滑块拦截..."
-}
-```
-
----
-
-## 2. Cookie 零停机热更新接口 (Update Cookie API)
-
-* **接口路径**：`POST /api/cookie/update`
-* **应用场景**：当抓取商品触发 401 报错时，客户端通过该接口实时推送到常驻 Chromium 浏览器内。
-
-### 请求协议报文 (Request JSON Payload)
-```json
-{
-  "cookie": "aead_id=xxx; xman_f=yyy; ali_apache_id=zzz; cna=..."
-}
-```
-
-### 响应协议报文 (HTTP 200 OK)
-```json
-{
-  "success": true,
-  "message": "Cookie 热更新成功，常驻 Chrome 进程已立刻生效，共载入 18 个字段",
-  "cookie_count": 18
-}
-```
-
----
-
-## 3. 服务健康状态心跳接口 (Health Check API)
-
-* **接口路径**：`GET /api/status`
-
-### 响应协议报文 (HTTP 200 OK)
-```json
-{
-  "success": true,
-  "service": "AliExpress Scraper HTTP API (Plan A - Tab Pool)",
-  "status": "healthy",
-  "active_tabs": 1,
-  "max_concurrent_tabs": 5,
-  "profile_status": {
-    "cookie_file_exists": true,
-    "user_data_profile_exists": true
-  }
-}
-```
+Cookie 更新接口仍是 5174 的兼容能力，但控制台不转发它，也不保存 Cookie 字符串。新的集成不应依赖浏览器请求中临时携带 Cookie。

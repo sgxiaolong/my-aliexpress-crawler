@@ -133,7 +133,7 @@ export const getPersistentBrowser = async () => {
 
   browserLaunchingPromise = (async () => {
     try {
-      // 1. 优先检测当前 user_data_profile 是否已经由本机的 Chrome 打开过，若有则直接复用连入
+      // 1. 优先连接同一独立 Profile 的系统 Chrome（固定 CDP 9223），若有则直接复用。
       console.log("🚀 [BrowserPool] 正在初始化常驻 Puppeteer 浏览器实例...");
       persistentBrowser = await connectToExistingBrowser(USER_DATA_DIR);
       if (persistentBrowser) {
@@ -219,6 +219,60 @@ export const getPersistentBrowser = async () => {
   })();
 
   return await browserLaunchingPromise;
+};
+
+const inspectSessionPage = async (page, kind) => {
+  if (!page || page.isClosed()) {
+    return { status: "unknown", message: "浏览器页面尚未就绪" };
+  }
+
+  const snapshot = await page.evaluate(() => ({
+    url: location.href,
+    title: document.title || "",
+    text: (document.body?.innerText || "").slice(0, 1200),
+  })).catch(() => ({ url: page.url(), title: "", text: "" }));
+  const evidence = `${snapshot.url}\n${snapshot.title}\n${snapshot.text}`.toLowerCase();
+  const isLogin = /login\.aliexpress\.com|passport\.aliexpress\.com|\b(sign in|login)\b|登录|登陆/.test(evidence);
+  const isCaptcha = /sec\.aliexpress\.com|slider|验证码|captcha|security check|punish|validate/.test(evidence);
+
+  if (isCaptcha) {
+    return { status: "captcha_required", message: "页面需要完成验证码或安全验证", url: snapshot.url };
+  }
+  if (isLogin) {
+    return { status: "login_required", message: "页面已跳转登录，请在已打开窗口登录", url: snapshot.url };
+  }
+  if (kind === "csp" && !snapshot.url.includes("csp.aliexpress.com")) {
+    return { status: "unknown", message: "CSP 页面正在跳转或尚未加载", url: snapshot.url };
+  }
+  if (kind === "product" && !snapshot.url.includes("aliexpress.com")) {
+    return { status: "unknown", message: "商品页面正在跳转或尚未加载", url: snapshot.url };
+  }
+  return {
+    status: kind === "product" ? "ready" : "logged_in",
+    message: kind === "product" ? "商品页可采集，未检测到验证码" : "CSP 后台已登录",
+    url: snapshot.url,
+  };
+};
+
+/**
+ * 只读取服务启动时已打开的两个页面，不重新导航、不注入 Cookie。
+ * 控制台据此展示主站验证码状态与 CSP 登录状态。
+ */
+export const getAliExpressSessionStatus = async () => {
+  try {
+    await getPersistentBrowser();
+    const [product, csp] = await Promise.all([
+      inspectSessionPage(startupPages.product, "product"),
+      inspectSessionPage(startupPages.csp, "csp"),
+    ]);
+    return { product, csp };
+  } catch (error) {
+    const message = error?.message || String(error);
+    return {
+      product: { status: "offline", message },
+      csp: { status: "offline", message },
+    };
+  }
 };
 
 /**

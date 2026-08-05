@@ -13,7 +13,16 @@ puppeteer.use(StealthPlugin());
 
 let persistentBrowser = null;
 let browserLaunchingPromise = null;
-const USER_DATA_DIR = "./user_data_profile_puppeteer";
+let startupPages = { product: null, csp: null };
+// 延续既有的独立采集 Profile，切换到系统 Chrome 时无需重新登录。
+const USER_DATA_DIR = path.resolve(process.env.CRAWLER_CHROME_PROFILE_DIR || "./user_data_profile_puppeteer");
+const CRAWLER_CDP_PORT = Number(process.env.CRAWLER_CDP_PORT || 9223);
+const SYSTEM_CHROME_EXECUTABLES = [
+  process.env.CRAWLER_CHROME_EXECUTABLE,
+  process.env.ProgramFiles && path.join(process.env.ProgramFiles, "Google", "Chrome", "Application", "chrome.exe"),
+  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  process.env["ProgramFiles(x86)"] && path.join(process.env["ProgramFiles(x86)"], "Google", "Chrome", "Application", "chrome.exe"),
+].filter(Boolean);
 /** 速卖通商品详情页 Cookie 存储文件 */
 const COOKIE_FILE = "./cookie.txt";
 /** 跨境卖家中心 CSP Cookie 存储文件 */
@@ -22,6 +31,35 @@ const STARTUP_URLS = [
   "https://www.aliexpress.com/item/1005012147729552.html",
   "https://csp.aliexpress.com/m_apps/aechoice-product-bidding/biddingRegistration?biddingTaskId=84842914&biddingActivityId=101001&superLinkItemId=1005008248138189&activeKey=PRODUCT_BID&channelId=2427919",
 ];
+
+const resolveSystemChromeExecutable = () =>
+  SYSTEM_CHROME_EXECUTABLES.find((candidate) => fs.existsSync(candidate)) || null;
+
+/**
+ * 采集使用独立 Chrome Profile，但 Puppeteer 新建标签页时 Chrome 仍可能把该窗口
+ * 激活到前台。通过 CDP 最小化整个采集窗口，让页面继续在后台工作；遇到登录/验证码
+ * 时用户仍可自行从任务栏恢复该窗口。
+ */
+const keepCrawlerWindowMinimized = async (page) => {
+  if (String(process.env.CRAWLER_KEEP_WINDOW_MINIMIZED || "true").toLowerCase() === "false") return;
+  if (!page || page.isClosed()) return;
+  let session = null;
+  try {
+    session = await page.target().createCDPSession();
+    const { windowId } = await session.send("Browser.getWindowForTarget");
+    if (windowId) {
+      await session.send("Browser.setWindowBounds", {
+        windowId,
+        bounds: { windowState: "minimized" },
+      });
+    }
+  } catch (error) {
+    // 不让窗口状态调整影响采集；部分旧版 Chrome 可能暂不支持该 DevTools 命令。
+    console.warn("[BrowserPool] 采集窗口后台化失败：", error.message);
+  } finally {
+    await session?.detach().catch(() => {});
+  }
+};
 
 /**
  * 从速卖通原始页面/API 数据中提取可选的商品说明书。
@@ -50,7 +88,7 @@ const connectToExistingBrowser = async (userDataDir) => {
       const lines = fs.readFileSync(portFile, "utf-8").trim().split(/\r?\n/);
       const port = lines[0]?.trim();
       const wsPath = lines[1]?.trim();
-      if (port && wsPath) {
+      if (port && wsPath && Number(port) === CRAWLER_CDP_PORT) {
         const wsEndpoint = `ws://127.0.0.1:${port}${wsPath}`;
         const browser = await puppeteer.connect({
           browserWSEndpoint: wsEndpoint,
@@ -97,19 +135,37 @@ export const getPersistentBrowser = async () => {
     try {
       // 1. 优先检测当前 user_data_profile 是否已经由本机的 Chrome 打开过，若有则直接复用连入
       console.log("🚀 [BrowserPool] 正在初始化常驻 Puppeteer 浏览器实例...");
-      persistentBrowser = await puppeteer.launch({
-        headless: false,
-        defaultViewport: null,
-        userDataDir: USER_DATA_DIR,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-blink-features=AutomationControlled",
-          "--start-maximized",
-        ],
-      });
-
-      console.log("✅ [BrowserPool] 常驻 Chrome 浏览器挂载 Profile 启动完毕，多标签页并发池已就绪！");
+      persistentBrowser = await connectToExistingBrowser(USER_DATA_DIR);
+      if (persistentBrowser) {
+        console.log("✅ [BrowserPool] 已复用原有 Chrome Profile，会话与已打开页面保持不变。");
+      } else {
+        const executablePath = resolveSystemChromeExecutable();
+        if (!executablePath) {
+          throw new Error("未找到系统 Chrome，请设置 CRAWLER_CHROME_EXECUTABLE 指向 chrome.exe");
+        }
+        persistentBrowser = await puppeteer.launch({
+          headless: false,
+          defaultViewport: null,
+          userDataDir: USER_DATA_DIR,
+          executablePath,
+          // Puppeteer 默认会随机占用调试端口；这里改为固定 9223，便于服务健康检查与人工排障。
+          ignoreDefaultArgs: ["--remote-debugging-port=0"],
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-blink-features=AutomationControlled",
+            "--remote-debugging-address=127.0.0.1",
+            `--remote-debugging-port=${CRAWLER_CDP_PORT}`,
+            // 保持浏览器在任务栏后台，避免服务启动时抢占当前桌面焦点。
+            "--start-minimized",
+            // 最小化窗口时仍保持采集页面的网络和定时器正常运行。
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-background-timer-throttling",
+          ],
+        });
+        console.log(`✅ [BrowserPool] 系统 Chrome 已以 CDP ${CRAWLER_CDP_PORT} 挂载独立 Profile 启动，多标签页并发池已就绪！`);
+      }
 
       // 启动时同时读取两套 Cookie 文件注入浏览器
       const cookieLoadTasks = [
@@ -133,7 +189,7 @@ export const getPersistentBrowser = async () => {
       await Promise.all(
         existingPages.slice(STARTUP_URLS.length).map((page) => page.close())
       );
-      const startupPages = await Promise.all(
+      const openedStartupPages = await Promise.all(
         STARTUP_URLS.map(async (url, index) => {
           const page = existingPages[index] || await persistentBrowser.newPage();
           try {
@@ -149,9 +205,12 @@ export const getPersistentBrowser = async () => {
           return page;
         })
       );
-      if (startupPages[0]) {
-        await startupPages[0].bringToFront();
-      }
+      startupPages = {
+        product: openedStartupPages[0] || null,
+        csp: openedStartupPages[1] || null,
+      };
+      await keepCrawlerWindowMinimized(startupPages.product || startupPages.csp);
+      // 不主动前置任何页面；需要登录或处理验证码时由用户从任务栏打开。
 
       return persistentBrowser;
     } finally {
@@ -222,6 +281,9 @@ export const scrapeWithTab = async (
   const browser = await getPersistentBrowser();
   // 核心：在常驻浏览器中打开一个新的并发标签页 (Tab)
   const page = await browser.newPage();
+  // 浏览器在启动阶段已最小化。这里不能再次切换窗口状态：newPage 会短暂
+  // 激活 Chrome，而紧随其后的最小化会造成“前台闪一下再收起”的循环。
+  // 新标签继承已最小化的窗口状态，采集过程无需再碰窗口。
 
   try {
     let apiData = null;
@@ -375,6 +437,7 @@ export const scrapeCspProductAttrs = async (cspUrl, timeout = 60000) => {
 
   const browser = await getPersistentBrowser();
   const page = await browser.newPage();
+  // 同上：仅在浏览器启动时最小化一次，避免 CSP 采集新标签反复抢焦点。
 
   try {
     console.log(`🏪 [CSP抓取] 正在打开竞价页: ${cspUrl}`);

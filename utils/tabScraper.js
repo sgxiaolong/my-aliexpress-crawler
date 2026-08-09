@@ -54,7 +54,7 @@ const keepCrawlerWindowMinimized = async (page) => {
       });
     }
   } catch (error) {
-    // 不让窗口状态调整影响采集；部分旧版 Chrome 可能暂不支持该 DevTools 命令。
+    // 窗口状态调整是非关键能力；DevTools 不支持该命令时不影响采集。
     console.warn("[BrowserPool] 采集窗口后台化失败：", error.message);
   } finally {
     await session?.detach().catch(() => {});

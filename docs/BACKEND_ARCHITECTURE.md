@@ -3,8 +3,7 @@
 ```text
 Express /api
   ├─ status routes：浏览器、商品页和 CSP 会话状态
-  ├─ scrape routes：商品抓取、CSP 属性/活动信息
-  └─ cookie routes：兼容性 Cookie 更新接口
+  └─ scrape routes：商品抓取、CSP 属性/活动信息
                  │
                  ▼
 puppeteer-extra → 系统 Chrome (Profile + CDP 9223)

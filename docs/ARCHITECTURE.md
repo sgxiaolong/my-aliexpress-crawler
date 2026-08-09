@@ -15,6 +15,6 @@
 
 ## 会话与人工介入
 
-Profile 和可选 `cookie.txt` / `cookie_csp.txt` 会在启动时恢复。服务仍保留 Cookie 更新 API 供兼容性或运维使用，但 5173 当前 UI 不再提供 Cookie 字符串输入。推荐直接在该 Chrome 窗口完成速卖通主站或 CSP 登录、验证码处理，再由 `/api/status` 和 5173 顶部状态确认。
+Profile 和可选 `cookie.txt` / `cookie_csp.txt` 会在启动时恢复。服务不提供 Cookie 字符串更新 API；应直接在该 Chrome 窗口完成速卖通主站或 CSP 登录、验证码处理，再由 `/api/status` 和 5173 顶部状态确认。
 
 `interactive_scraper.js`、`get_full_json.js` 等历史脚本可能仍使用旧 Profile 路径；它们不等于 HTTP 服务的登录态。

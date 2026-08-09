@@ -5,7 +5,6 @@ import {
   injectCspCookieIntoBrowser,
   scrapeCspProductAttrs,
 } from "../../utils/tabScraper.js";
-import { normalizeCookies } from "../../utils/cookieUtils.js";
 import { config } from "../config/index.js";
 import { HttpError } from "../utils/httpError.js";
 import { fetchCspUrlByProductId } from "./cspUrl.service.js";
@@ -229,27 +228,4 @@ export async function scrapeCspAttrs({ productId, cspUrl, cookie }) {
       cspUrl: resolvedCspUrl,
     });
   }
-}
-
-export async function updateAliCookie(cookie) {
-  if (!cookie || typeof cookie !== "string") {
-    throw new HttpError(400, "INVALID_COOKIE", "请求参数中必须包含字符串类型的 cookie 字段");
-  }
-
-  const normalized = normalizeCookies(cookie);
-  if (normalized.length === 0) {
-    throw new HttpError(400, "INVALID_COOKIE_FORMAT", "无法解析出有效的速卖通 Cookie 键值对，请检查格式");
-  }
-
-  fs.writeFileSync(config.cookieFile, cookie.trim(), "utf-8");
-  return await injectCookieIntoBrowser(cookie.trim());
-}
-
-export async function updateCspCookie(cookie) {
-  if (!cookie || typeof cookie !== "string" || cookie.trim().length < 10) {
-    throw new HttpError(400, "INVALID_COOKIE_FORMAT", "无效的 CSP Cookie 字符串，请检查格式");
-  }
-
-  fs.writeFileSync(config.cspCookieFile, cookie.trim(), "utf-8");
-  return await injectCspCookieIntoBrowser(cookie.trim());
 }

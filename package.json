@@ -1,7 +1,7 @@
 {
   "name": "my-aliexpress-crawler",
   "version": "1.0.0",
-  "description": "AliExpress product scraper application with interactive cookie support",
+  "description": "AliExpress product scraper service with managed Chrome profiles",
   "type": "module",
   "main": "get_full_json.js",
   "scripts": {

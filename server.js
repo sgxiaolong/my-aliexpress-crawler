@@ -10,7 +10,11 @@ process.on("SIGINT", async () => {
   process.exit(0);
 });
 
-app.listen(config.port, async () => {
+app.listen(config.port, async (error) => {
+  if (error) {
+    console.error(`AliExpress crawler failed to listen on port ${config.port}:`, error.message);
+    process.exit(1);
+  }
   console.log("==========================================================");
   console.log("AliExpress crawler service started");
   console.log(`Role: scrape-executor`);

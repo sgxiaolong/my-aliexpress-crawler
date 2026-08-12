@@ -1,10 +1,10 @@
 # my-aliexpress-crawler
 
-速卖通商品与 CSP 信息抓取服务。生产集成由 5173 调用，通常监听 `5174`；独立运行时默认端口仍是 `3000`。
+速卖通商品与 CSP 信息抓取服务。生产集成由 15173 调用，通常监听 `15174`；独立运行时默认端口仍是 `3000`。
 
 ```powershell
 npm install
-$env:PORT='5174'
+$env:PORT='15174'
 npm run serve
 ```
 

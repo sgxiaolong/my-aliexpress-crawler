@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node get_full_json.js",
     "interactive": "node interactive_scraper.js",
-    "serve": "node server.js"
+    "serve": "node server.js",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "aliexpress-product-scraper": "file:./libs/aliexpress-product-scraper",

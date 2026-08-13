@@ -14,4 +14,4 @@ puppeteer-extra → 系统 Chrome (Profile + CDP 9223)
 
 `tabScraper.js` 负责常驻浏览器单例、系统 Chrome 探测/启动、两套会话恢复和启动页面。抓取结果返回给调用方；业务商品 JSON 由 15173 保存，不由本服务写入 `crawler-upload-controller/storage/`。
 
-默认端口为 `3000`，但项目联调使用 `PORT=15174`，15173 的默认 `CRAWLER_BASE_URL` 也指向 `http://127.0.0.1:15174`。
+默认端口为 `3000`，但项目联调使用 `PORT=15174`，15173 的默认 `CRAWLER_BASE_URL` 也指向 `http://127.0.0.1:15174`。`CRAWLER_HOST` 默认 `127.0.0.1`；登录态只由 crawler 管理的 Chrome Profile 和本地 Cookie 文件恢复，HTTP 接口不接收调用方传入的 Cookie。跨机器调用前必须显式改为 `0.0.0.0` 并配置服务认证和网络白名单。

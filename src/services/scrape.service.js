@@ -1,11 +1,7 @@
-import fs from "fs";
 import {
   scrapeWithTab,
-  injectCookieIntoBrowser,
-  injectCspCookieIntoBrowser,
   scrapeCspProductAttrs,
 } from "../../utils/tabScraper.js";
-import { config } from "../config/index.js";
 import { HttpError } from "../utils/httpError.js";
 import { fetchCspUrlByProductId } from "./cspUrl.service.js";
 import { acquireTabSlot, getTabPoolStatus, releaseTabSlot } from "./tabPool.service.js";
@@ -33,8 +29,8 @@ const mapCspFailureToHttpError = (productId, failReason) => {
     return new HttpError(
       401,
       "CSP_COOKIE_EXPIRED",
-      "CSP 卖家中心会话已过期或未配置，被转跳至登录/验证页面。请更新 CSP Cookie。",
-      { action_required: "RENEW_CSP_COOKIE", details: failReason }
+      "CSP 卖家中心会话已过期或未配置，被转跳至登录/验证页面。请在 crawler 管理的 Chrome 窗口重新登录或完成验证。",
+      { action_required: "RELOGIN_CSP", details: failReason }
     );
   }
 
@@ -80,15 +76,10 @@ export const resolveEffectiveCategory = (productCategoryId, cspCategoryId) => {
   };
 };
 
-export async function scrapeProduct(productId, customCookie) {
+export async function scrapeProduct(productId) {
   const id = String(productId || "").trim();
   if (!id) {
     throw new HttpError(400, "MISSING_PRODUCT_ID", "请提供必须的商品 ID 参数 (id 或 productId)");
-  }
-
-  if (customCookie && typeof customCookie === "string") {
-    fs.writeFileSync(config.cookieFile, customCookie.trim(), "utf-8");
-    await injectCookieIntoBrowser(customCookie.trim());
   }
 
   const pool = getTabPoolStatus();
@@ -165,8 +156,8 @@ export async function scrapeProduct(productId, customCookie) {
       throw new HttpError(
         401,
         "COOKIE_EXPIRED_OR_BLOCKED",
-        "速卖通会话已失效、触发人机验证或转跳登录，请更新 Cookie 后重试",
-        { action_required: "RENEW_COOKIE", details: err.message }
+        "速卖通会话已失效、触发人机验证或转跳登录，请在 crawler 管理的 Chrome 窗口重新登录或完成验证后重试",
+        { action_required: "RELOGIN", details: err.message }
       );
     }
     throw new HttpError(500, "SCRAPE_FAILED", err.message || "抓取商品数据失败");
@@ -175,18 +166,12 @@ export async function scrapeProduct(productId, customCookie) {
   }
 }
 
-export async function scrapeCspAttrs({ productId, cspUrl, cookie }) {
+export async function scrapeCspAttrs({ productId, cspUrl }) {
   if (!productId && !cspUrl) {
     throw new HttpError(
       400,
       "MISSING_PARAMS",
       "请提供 productId（商品ID，自动查最新期 URL）或 cspUrl（直接传竞价报名页链接）"
-    );
-  }
-
-  if (cookie) {
-    await injectCspCookieIntoBrowser(cookie).catch((error) =>
-      console.warn("[CSP] 临时 Cookie 注入警告:", error.message)
     );
   }
 

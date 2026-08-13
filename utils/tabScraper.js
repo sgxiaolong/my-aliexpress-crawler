@@ -296,30 +296,6 @@ const injectCookieByDomain = async (cookieStr, domain) => {
 };
 
 /**
- * 向常驻浏览器热注入「速卖通主站 (aliexpress.com)」Cookie
- * @param {string} cookieStr
- */
-export const injectCookieIntoBrowser = async (cookieStr) => {
-  const count = await injectCookieByDomain(cookieStr, ALIEXPRESS_DOMAIN);
-  if (count > 0) {
-    console.log(`🍪 [BrowserPool] 成功热注入速卖通主站 Cookie ${count} 个字段！`);
-  }
-  return count;
-};
-
-/**
- * 向常驻浏览器热注入「CSP 跨境卖家中心 (csp.aliexpress.com)」Cookie
- * @param {string} cookieStr
- */
-export const injectCspCookieIntoBrowser = async (cookieStr) => {
-  const count = await injectCookieByDomain(cookieStr, CSP_DOMAIN);
-  if (count > 0) {
-    console.log(`🍪 [BrowserPool] 成功热注入 CSP 卖家中心 Cookie ${count} 个字段！`);
-  }
-  return count;
-};
-
-/**
  * 方案 A 核心方法：基于多标签页 (Tab) 并行抓取商品信息
  * @param {string} id 商品 ID
  * @param {object} options 配置参数

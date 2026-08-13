@@ -1,5 +1,6 @@
 export const config = {
   port: process.env.PORT || 3000,
+  host: process.env.CRAWLER_HOST || "127.0.0.1",
   userDataDir: process.env.CRAWLER_CHROME_PROFILE_DIR || "./user_data_profile_puppeteer",
   cookieFile: "./cookie.txt",
   cspCookieFile: "./cookie_csp.txt",

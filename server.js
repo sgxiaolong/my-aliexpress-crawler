@@ -10,18 +10,19 @@ process.on("SIGINT", async () => {
   process.exit(0);
 });
 
-app.listen(config.port, async (error) => {
-  if (error) {
-    console.error(`AliExpress crawler failed to listen on port ${config.port}:`, error.message);
-    process.exit(1);
-  }
+const server = app.listen(config.port, config.host, async () => {
   console.log("==========================================================");
   console.log("AliExpress crawler service started");
   console.log(`Role: scrape-executor`);
-  console.log(`URL: http://localhost:${config.port}`);
+  console.log(`URL: http://${config.host}:${config.port}`);
   console.log("==========================================================");
 
   getPersistentBrowser().catch((err) =>
     console.error("后台预热启动浏览器出现警示:", err.message)
   );
+});
+
+server.once("error", (error) => {
+  console.error(`AliExpress crawler failed to listen on ${config.host}:${config.port}:`, error.message);
+  process.exit(1);
 });

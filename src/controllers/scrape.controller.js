@@ -4,7 +4,8 @@ import { sendError } from "../utils/httpError.js";
 export const scrapeProductController = async (req, res) => {
   try {
     const id = req.query.id || req.body?.id || req.body?.productId;
-    const data = await scrapeProduct(id);
+    const includeCsp = req.query.includeCsp !== "false" && req.body?.includeCsp !== false;
+    const data = await scrapeProduct(id, { includeCsp });
     return res.status(200).json({
       success: true,
       mode: "Browser-Tab-Pool (Plan A)",

@@ -76,11 +76,13 @@ export const resolveEffectiveCategory = (productCategoryId, cspCategoryId) => {
   };
 };
 
-export async function scrapeProduct(productId) {
+export async function scrapeProduct(productId, options = {}) {
   const id = String(productId || "").trim();
   if (!id) {
     throw new HttpError(400, "MISSING_PRODUCT_ID", "请提供必须的商品 ID 参数 (id 或 productId)");
   }
+
+  const includeCsp = options.includeCsp !== false;
 
   const pool = getTabPoolStatus();
   if (pool.activeTabs >= pool.maxConcurrentTabs) {
@@ -92,43 +94,51 @@ export async function scrapeProduct(productId) {
   await acquireTabSlot();
 
   try {
-    console.log(`[Scrape] Start product ${id}`);
-    const [productRes, cspRes] = await Promise.allSettled([
-      scrapeWithTab(id, { reviewsCount: 10 }),
-      (async () => {
-        const cspMeta = await fetchCspUrlByProductId(id);
-        const { attrs, raw, categoryIdList, categoryId, categoryChain } = await scrapeCspProductAttrs(cspMeta.cspUrl);
-        return {
-          success: true,
-          cspUrl: cspMeta.cspUrl,
-          periodName: cspMeta.periodName,
-          activityId: cspMeta.activityId,
-          taskId: cspMeta.taskId,
-          channelId: cspMeta.channelId,
-          productAttrs: attrs,
-          attrsCount: Object.keys(attrs).length,
-          rawKeyAttributes: raw,
-          categoryIdList: categoryIdList || [],
-          categoryId: categoryId || "",
-          categoryChain: categoryChain || "",
-        };
-      })(),
-    ]);
+    console.log(`[Scrape] Start product ${id} (includeCsp=${includeCsp})`);
 
-    if (productRes.status === "rejected") {
-      throw productRes.reason;
+    let productData = null;
+    let cspData = null;
+
+    if (includeCsp) {
+      const [productRes, cspRes] = await Promise.allSettled([
+        scrapeWithTab(id, { reviewsCount: 10 }),
+        (async () => {
+          const cspMeta = await fetchCspUrlByProductId(id);
+          const { attrs, raw, categoryIdList, categoryId, categoryChain } = await scrapeCspProductAttrs(cspMeta.cspUrl);
+          return {
+            success: true,
+            cspUrl: cspMeta.cspUrl,
+            periodName: cspMeta.periodName,
+            activityId: cspMeta.activityId,
+            taskId: cspMeta.taskId,
+            channelId: cspMeta.channelId,
+            productAttrs: attrs,
+            attrsCount: Object.keys(attrs).length,
+            rawKeyAttributes: raw,
+            categoryIdList: categoryIdList || [],
+            categoryId: categoryId || "",
+            categoryChain: categoryChain || "",
+          };
+        })(),
+      ]);
+
+      if (productRes.status === "rejected") {
+        throw productRes.reason;
+      }
+
+      if (cspRes.status === "rejected" || !cspRes.value) {
+        const failReason =
+          cspRes.status === "rejected"
+            ? cspRes.reason?.message || "CSP 页面未能抓取属性"
+            : "CSP 竞价接口数据异常";
+        throw mapCspFailureToHttpError(id, failReason);
+      }
+
+      productData = productRes.value;
+      cspData = cspRes.value;
+    } else {
+      productData = await scrapeWithTab(id, { reviewsCount: 10 });
     }
-
-    if (cspRes.status === "rejected" || !cspRes.value) {
-      const failReason =
-        cspRes.status === "rejected"
-          ? cspRes.reason?.message || "CSP 页面未能抓取属性"
-          : "CSP 竞价接口数据异常";
-      throw mapCspFailureToHttpError(id, failReason);
-    }
-
-    const productData = productRes.value;
-    const cspData = cspRes.value;
 
     if (!productData || !productData.title || String(productData.title).trim() === "") {
       throw new HttpError(
@@ -138,16 +148,23 @@ export async function scrapeProduct(productId) {
       );
     }
 
-    const resolvedCategory = resolveEffectiveCategory(productData.categoryId, cspData.categoryId);
-    productData.categoryId = resolvedCategory.categoryId;
-    productData.categorySource = resolvedCategory.categorySource;
-    productData.sourceCategoryId = resolvedCategory.sourceCategoryId;
-    productData.cspInfo = cspData;
-    productData.cspProductAttrs = cspData.productAttrs;
-    productData.attributes = {
-      ...(productData.attributes || {}),
-      ...cspData.productAttrs,
-    };
+    if (includeCsp && cspData) {
+      const resolvedCategory = resolveEffectiveCategory(productData.categoryId, cspData.categoryId);
+      productData.categoryId = resolvedCategory.categoryId;
+      productData.categorySource = resolvedCategory.categorySource;
+      productData.sourceCategoryId = resolvedCategory.sourceCategoryId;
+      productData.cspInfo = cspData;
+      productData.cspProductAttrs = cspData.productAttrs;
+      productData.attributes = {
+        ...(productData.attributes || {}),
+        ...cspData.productAttrs,
+      };
+    } else {
+      productData.categorySource = "product_page";
+      productData.sourceCategoryId = productData.categoryId || null;
+      productData.cspInfo = null;
+      productData.cspProductAttrs = {};
+    }
 
     return productData;
   } catch (err) {

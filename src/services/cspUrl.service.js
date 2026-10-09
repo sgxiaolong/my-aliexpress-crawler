@@ -27,6 +27,5 @@ export async function fetchCspUrlByProductId(productId) {
     periodName: data.period_name,
     activityId: data.activity_id,
     taskId: data.task_id,
-    channelId: data.channel_id,
   };
 }

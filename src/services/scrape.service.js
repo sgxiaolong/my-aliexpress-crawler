@@ -111,7 +111,6 @@ export async function scrapeProduct(productId, options = {}) {
             periodName: cspMeta.periodName,
             activityId: cspMeta.activityId,
             taskId: cspMeta.taskId,
-            channelId: cspMeta.channelId,
             productAttrs: attrs,
             attrsCount: Object.keys(attrs).length,
             rawKeyAttributes: raw,
@@ -202,7 +201,6 @@ export async function scrapeCspAttrs({ productId, cspUrl }) {
         period_name: result.periodName,
         activity_id: result.activityId,
         task_id: result.taskId,
-        channel_id: result.channelId,
       };
     } catch (error) {
       throw new HttpError(

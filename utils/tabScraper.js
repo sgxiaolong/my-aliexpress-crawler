@@ -104,21 +104,6 @@ const connectToExistingBrowser = async (userDataDir) => {
 };
 
 /**
- * 清理异常崩溃导致的 Profile 目录残留锁文件
- */
-const cleanStaleLockFiles = (userDataDir) => {
-  const lockFiles = ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"];
-  for (const file of lockFiles) {
-    const fullPath = path.join(userDataDir, file);
-    if (fs.existsSync(fullPath)) {
-      try {
-        fs.unlinkSync(fullPath);
-      } catch (e) {}
-    }
-  }
-};
-
-/**
  * 获取常驻浏览器单例实例（方案 A：单实例常驻 + 多标签页并发池 + 自动复用现存实例 + 并发防冲突）
  */
 export const getPersistentBrowser = async () => {

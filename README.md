@@ -7,7 +7,9 @@
 ```powershell
 npm install
 $env:PORT='15174'
-npm run serve
+npm start
 ```
+
+`npm start` 与 `npm run serve` 均启动 HTTP 服务。历史独立采集脚本已退役，已有 Profile、Cookie 和采集数据保留。
 
 服务启动时使用系统 Chrome、独立 Profile `user_data_profile_puppeteer/` 和 CDP `9223`。浏览器最小化打开商品示例页与 CSP 示例页，便于人工登录或处理验证码，但不会抢占前台。详情见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 和 [docs/API_REFERENCE.md](docs/API_REFERENCE.md)。

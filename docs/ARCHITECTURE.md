@@ -17,4 +17,4 @@
 
 Profile 和可选 `cookie.txt` / `cookie_csp.txt` 会在启动时恢复。服务不提供 Cookie 字符串更新 API；应直接在该 Chrome 窗口完成速卖通主站或 CSP 登录、验证码处理，再由 `/api/status` 和 15173 顶部状态确认。
 
-`interactive_scraper.js`、`get_full_json.js` 等历史脚本可能仍使用旧 Profile 路径；它们不等于 HTTP 服务的登录态。
+历史独立采集脚本已退役，`npm start` 与 `npm run serve` 统一启动 `server.js`。旧 `user_data_profile/` 及其 Cookie、采集数据保留，但不等于当前 HTTP 服务的登录态。

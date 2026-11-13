@@ -3,5 +3,6 @@ user_data_profile/
 user_data_profile_puppeteer/
 *.json
 !package.json
+!/package-lock.json
 !/contracts/openapi.json
 cookie.txt

@@ -1,3 +1,6 @@
 [submodule "libs/aliexpress-product-scraper"]
 	path = libs/aliexpress-product-scraper
 	url = https://github.com/sgxiaolong/aliexpress-product-scraper.git
+[submodule "tools/contract-tools"]
+	path = tools/contract-tools
+	url = https://github.com/sgxiaolong/contract-tools.git

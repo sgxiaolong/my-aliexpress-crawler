@@ -1,0 +1,29 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "Crawler API consumed by upload controller", "version": "1.0.0"},
+  "paths": {
+    "/api/status": {"get": {"responses": {"200": {"description": "Crawler status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StatusResponse"}}}}}}},
+    "/api/scrape": {"get": {
+      "parameters": [{"name": "id", "in": "query", "required": true, "schema": {"type": "string"}}, {"name": "includeCsp", "in": "query", "schema": {"type": "string", "enum": ["true", "false"]}}],
+      "responses": {"200": {"description": "Collected product", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ScrapeResponse"}}}}, "default": {"description": "Failed collection", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}}
+    }}
+  },
+  "components": {"schemas": {
+    "StatusResponse": {"type": "object", "required": ["success", "service", "role", "status", "active_tabs", "max_concurrent_tabs", "queued_tabs", "profile_status", "session_status"], "properties": {
+      "success": {"const": true}, "service": {"type": "string"}, "role": {"const": "scrape-executor"}, "status": {"const": "healthy"},
+      "active_tabs": {"type": "integer"}, "max_concurrent_tabs": {"type": "integer"}, "queued_tabs": {"type": "integer"},
+      "profile_status": {"type": "object", "additionalProperties": {"type": "boolean"}},
+      "session_status": {"type": "object", "additionalProperties": true}
+    }},
+    "ScrapedProduct": {"type": "object", "description": "Stable boundary fields; upstream product/sku fields remain open, see docs/API_PROTOCOL.md.", "additionalProperties": true, "properties": {
+      "productId": {"type": ["string", "integer"]}, "title": {"type": "string"}, "images": {"type": "array", "items": {"type": "string"}},
+      "categoryId": {"type": ["string", "integer", "null"]}, "categorySource": {"enum": ["csp_bidding", "product_page"]},
+      "sourceCategoryId": {"type": ["string", "integer", "null"]}, "cspInfo": {"type": ["object", "null"], "additionalProperties": true},
+      "cspProductAttrs": {"type": "object", "additionalProperties": true}, "attributes": {"type": "object", "additionalProperties": true}
+    }},
+    "ScrapeResponse": {"type": "object", "required": ["success", "mode", "timestamp", "data"], "properties": {
+      "success": {"const": true}, "mode": {"type": "string"}, "timestamp": {"type": "string"}, "data": {"$ref": "#/components/schemas/ScrapedProduct"}
+    }},
+    "ErrorResponse": {"type": "object", "required": ["success", "message"], "properties": {"success": {"const": false}, "message": {"type": "string"}, "error_code": {"type": "string"}}, "additionalProperties": true}
+  }}
+}

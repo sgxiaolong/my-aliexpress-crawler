@@ -1,5 +1,7 @@
+// @ts-check
 import { config } from "../config/index.js";
 
+/** @param {import('../generated/flask').operations['bidding_get_csp_url_by_product_get']['parameters']['query']['super_link_id']} productId */
 export async function fetchCspUrlByProductId(productId) {
   const apiUrl = `${config.flaskBiddingApi}/bidding/csp-url?super_link_id=${productId}`;
   console.log(`[CSP-URL] Query latest bidding URL: ${apiUrl}`);
@@ -14,6 +16,7 @@ export async function fetchCspUrlByProductId(productId) {
     throw new Error(`Flask 竞价 URL 接口返回 HTTP ${resp.status}`);
   }
 
+  /** @type {Partial<import('../generated/flask').components['schemas']['ProductCspUrlResponse']> & Partial<import('../generated/flask').components['schemas']['ProductCspUrl']> & {message?: string}} */
   const json = await resp.json();
   const data = json?.data || json;
   if (!data?.csp_url) {

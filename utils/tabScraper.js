@@ -29,7 +29,7 @@ const COOKIE_FILE = "./cookie.txt";
 const CSP_COOKIE_FILE = "./cookie_csp.txt";
 const STARTUP_URLS = [
   "https://www.aliexpress.com/item/1005012147729552.html",
-  "https://csp.aliexpress.com/m_apps/aechoice-product-bidding/biddingRegistration?biddingTaskId=84842914&biddingActivityId=101001&superLinkItemId=1005008248138189&activeKey=PRODUCT_BID&channelId=2427919",
+  "https://csp.aliexpress.com/",
 ];
 
 const resolveSystemChromeExecutable = () =>
@@ -121,6 +121,7 @@ export const getPersistentBrowser = async () => {
       // 1. 优先连接同一独立 Profile 的系统 Chrome（固定 CDP 9223），若有则直接复用。
       console.log("🚀 [BrowserPool] 正在初始化常驻 Puppeteer 浏览器实例...");
       persistentBrowser = await connectToExistingBrowser(USER_DATA_DIR);
+      const reusedBrowser = Boolean(persistentBrowser);
       if (persistentBrowser) {
         console.log("✅ [BrowserPool] 已复用原有 Chrome Profile，会话与已打开页面保持不变。");
       } else {
@@ -169,14 +170,13 @@ export const getPersistentBrowser = async () => {
         }
       }
 
-      // Open the requested working pages after cookies have been restored.
-      const existingPages = await persistentBrowser.pages();
-      await Promise.all(
-        existingPages.slice(STARTUP_URLS.length).map((page) => page.close())
-      );
+      // Reconnecting must never navigate or close pages opened by the user.
+      const existingPages = reusedBrowser ? await persistentBrowser.pages() : [];
       const openedStartupPages = await Promise.all(
-        STARTUP_URLS.map(async (url, index) => {
-          const page = existingPages[index] || await persistentBrowser.newPage();
+        STARTUP_URLS.map(async (url) => {
+          const existing = existingPages.find(page => page.url().startsWith(new URL(url).origin + '/'));
+          if (existing) return existing;
+          const page = await persistentBrowser.newPage();
           try {
             await page.goto(url, {
               waitUntil: "domcontentloaded",
@@ -194,7 +194,7 @@ export const getPersistentBrowser = async () => {
         product: openedStartupPages[0] || null,
         csp: openedStartupPages[1] || null,
       };
-      await keepCrawlerWindowMinimized(startupPages.product || startupPages.csp);
+      if (!reusedBrowser) await keepCrawlerWindowMinimized(startupPages.product || startupPages.csp);
       // 不主动前置任何页面；需要登录或处理验证码时由用户从任务栏打开。
 
       return persistentBrowser;

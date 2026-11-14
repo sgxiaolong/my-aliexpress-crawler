@@ -25,6 +25,8 @@ export interface components {
             code: number;
             msg?: string | null;
             data?: components["schemas"]["ProductCspUrl"];
+        } & {
+            [key: string]: unknown;
         };
         ProductCspUrl: {
             csp_url: string;
@@ -34,6 +36,8 @@ export interface components {
             period_name: string | null;
             start_date: string;
             end_date: string;
+        } & {
+            [key: string]: unknown;
         };
     };
     responses: never;

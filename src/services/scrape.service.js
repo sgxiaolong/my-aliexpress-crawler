@@ -99,13 +99,13 @@ export async function scrapeProduct(productId, options = {}) {
     let productData = null;
     let cspData = null;
 
-    if (includeCsp) {
-      const [productRes, cspRes] = await Promise.allSettled([
-        scrapeWithTab(id, { reviewsCount: 10 }),
-        (async () => {
+    // One acquired slot owns at most one page, including when MAX_CONCURRENT_TABS=1.
+    productData = await scrapeWithTab(id, { reviewsCount: 10 });
+    if (includeCsp && productData?.title && String(productData.title).trim()) {
+      try {
           const cspMeta = await fetchCspUrlByProductId(id);
           const { attrs, raw, categoryIdList, categoryId, categoryChain } = await scrapeCspProductAttrs(cspMeta.cspUrl);
-          return {
+          cspData = {
             success: true,
             cspUrl: cspMeta.cspUrl,
             periodName: cspMeta.periodName,
@@ -118,25 +118,9 @@ export async function scrapeProduct(productId, options = {}) {
             categoryId: categoryId || "",
             categoryChain: categoryChain || "",
           };
-        })(),
-      ]);
-
-      if (productRes.status === "rejected") {
-        throw productRes.reason;
+      } catch (error) {
+        throw mapCspFailureToHttpError(id, error?.message || "CSP 页面未能抓取属性");
       }
-
-      if (cspRes.status === "rejected" || !cspRes.value) {
-        const failReason =
-          cspRes.status === "rejected"
-            ? cspRes.reason?.message || "CSP 页面未能抓取属性"
-            : "CSP 竞价接口数据异常";
-        throw mapCspFailureToHttpError(id, failReason);
-      }
-
-      productData = productRes.value;
-      cspData = cspRes.value;
-    } else {
-      productData = await scrapeWithTab(id, { reviewsCount: 10 });
     }
 
     if (!productData || !productData.title || String(productData.title).trim() === "") {

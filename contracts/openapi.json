@@ -15,7 +15,7 @@
       "profile_status": {"type": "object", "additionalProperties": {"type": "boolean"}},
       "session_status": {"type": "object", "additionalProperties": true}
     }},
-    "ScrapedProduct": {"type": "object", "description": "Stable boundary fields; upstream product/sku fields remain open, see docs/API_PROTOCOL.md.", "additionalProperties": true, "properties": {
+    "ScrapedProduct": {"type": "object", "description": "Stable boundary fields; upstream product/sku fields remain open, see docs/控制器接口协议.md.", "additionalProperties": true, "properties": {
       "productId": {"type": ["string", "integer"]}, "title": {"type": "string"}, "images": {"type": "array", "items": {"type": "string"}},
       "categoryId": {"type": ["string", "integer", "null"]}, "categorySource": {"enum": ["csp_bidding", "product_page"]},
       "sourceCategoryId": {"type": ["string", "integer", "null"]}, "cspInfo": {"type": ["object", "null"], "additionalProperties": true},

@@ -12,10 +12,10 @@
 
 本项目消费 Flask CSP 查询类型（src/generated/flask.d.ts），并通过 contracts/openapi.json 向控制器提供采集/状态协议。上游动态商品字段保留开放结构，上游协议文档要求仍按本文件原有规则执行。
 
-- 修改接口或调用字段前，先读本仓库子模块 `tools/contract-tools/README.md`；完整工作区也可查看[共享工具文档](../../contract-tools/README.md)。子模块未初始化时运行 `git submodule update --init tools/contract-tools`；共享仓库为 `https://github.com/sgxiaolong/contract-tools`（私有）。
-- 工具主工作副本通常位于工作区根目录的 `contract-tools/`；本仓库的子模块固定工具版本。从子模块运行生成器时会自动定位工作区，其他布局设置 `SMT_WORKSPACE_ROOT`，不依赖爬虫总工程下的旧工具目录。
-- 在工具目录按 README 安装开发依赖后，执行 `npm run generate`、`npm run check`、`npm run typecheck`。命令面向完整跨项目工作区，生成文件写回调用方仓库；禁止手改生成文件，不自动迁移 HTTP 客户端。
-- 工具更新先验证、提交并推送共享仓库，再让使用方固定到已发布的提交；不要在服务启动时自动拉取最新工具。是否提交业务仓库仍按用户授权执行。
+- 修改接口或调用字段前，先读工作区顶层 [contract-tools/README.md](../../contract-tools/README.md)。工具已收敛为顶层超级仓库唯一子模块，未初始化时在顶层工作区根目录运行 `git submodule update --init contract-tools`；共享仓库为 `https://github.com/sgxiaolong/contract-tools`（私有）。
+- 运行生成器时会自动向上定位工作区，工具位于其他目录布局时设置 `SMT_WORKSPACE_ROOT`，不依赖本仓库下已移除的旧 `tools/contract-tools` 子模块。
+- 在顶层 `contract-tools/` 目录按 README 安装开发依赖后，执行 `npm run generate`、`npm run check`、`npm run typecheck`。命令面向完整跨项目工作区，生成文件写回调用方仓库；禁止手改生成文件，不自动迁移 HTTP 客户端。
+- 工具更新先验证、提交并推送共享仓库，再在顶层工作区更新 `contract-tools` 固定提交；不要在服务启动时自动拉取最新工具。是否提交业务仓库仍按用户授权执行。
 - 这是开发工具；业务部署使用已生成类型，不需要安装生成器或重启服务来生成协议。类型检查不替代现有参数校验和受影响的定向测试。
 
 ## 文档维护

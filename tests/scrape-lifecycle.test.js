@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
+import { config } from '../src/config/index.js';
+import * as tabPool from '../src/services/tabPool.service.js';
+import { HttpError } from '../src/utils/httpError.js';
 
 const source = (await fs.readFile(new URL('../src/services/scrape.service.js', import.meta.url), 'utf8'))
   .replace(/^import[\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
@@ -31,6 +34,40 @@ test('one slot owns one page and main-site failure never starts orphan CSP work'
   await assert.rejects(context.run('2'), /main failed/);
   assert.equal(cspCalls, 1);
   assert.equal(released, 2);
+});
+
+test('product and standalone CSP requests share slots and a failed page releases the next request', async t => {
+  const previousLimit = config.maxConcurrentTabs;
+  config.maxConcurrentTabs = 1;
+  t.after(() => { config.maxConcurrentTabs = previousLimit; });
+  const productPage = Promise.withResolvers();
+  const cspVisits = [];
+  const context = vm.createContext({
+    ...tabPool, HttpError, console: { log() {} },
+    scrapeWithTab: () => productPage.promise,
+    fetchCspUrlByProductId: async id => ({ cspUrl: 'csp-' + id }),
+    scrapeCspProductAttrs: async url => {
+      cspVisits.push(url);
+      if (url === 'broken') throw new Error('page failed');
+      return { attrs: { size: '1' }, raw: [] };
+    },
+  });
+  vm.runInContext(source, context);
+
+  const product = context.scrapeProduct('1');
+  const failed = assert.rejects(context.scrapeCspAttrs({ cspUrl: 'broken' }),
+    { status: 500, errorCode: 'CSP_SCRAPE_FAILED' });
+  const standalone = context.scrapeCspAttrs({ productId: '2' });
+  // Let the URL lookup finish while the product page still owns the only slot.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(cspVisits, []);
+  assert.deepEqual(tabPool.getTabPoolStatus(), { activeTabs: 1, queuedTabs: 2, maxConcurrentTabs: 1 });
+
+  productPage.resolve({ title: 'fixture' });
+  const [, , result] = await Promise.all([product, failed, standalone]);
+  assert.deepEqual(cspVisits, ['csp-1', 'broken', 'csp-2']);
+  assert.equal(result.attrs_count, 1);
+  assert.deepEqual(tabPool.getTabPoolStatus(), { activeTabs: 0, queuedTabs: 0, maxConcurrentTabs: 1 });
 });
 
 test('reconnecting Chrome does not navigate or close existing pages', async () => {

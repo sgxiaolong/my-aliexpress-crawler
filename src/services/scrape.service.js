@@ -196,6 +196,7 @@ export async function scrapeCspAttrs({ productId, cspUrl }) {
     }
   }
 
+  await acquireTabSlot();
   try {
     const { attrs, raw } = await scrapeCspProductAttrs(resolvedCspUrl);
     return {
@@ -211,5 +212,7 @@ export async function scrapeCspAttrs({ productId, cspUrl }) {
       productId: productId || null,
       cspUrl: resolvedCspUrl,
     });
+  } finally {
+    releaseTabSlot();
   }
 }

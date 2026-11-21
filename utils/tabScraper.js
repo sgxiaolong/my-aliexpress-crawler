@@ -3,6 +3,7 @@ import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import * as cheerio from "cheerio";
 import fs from "fs";
 import path from "path";
+import { config } from "../src/config/index.js";
 
 import { get as GetReviews } from "../libs/aliexpress-product-scraper/src/reviews.js";
 import { parseJsonp, extractDataFromApiResponse } from "../libs/aliexpress-product-scraper/src/parsers.js";
@@ -15,7 +16,7 @@ let persistentBrowser = null;
 let browserLaunchingPromise = null;
 let startupPages = { product: null, csp: null };
 // 延续既有的独立采集 Profile，切换到系统 Chrome 时无需重新登录。
-const USER_DATA_DIR = path.resolve(process.env.CRAWLER_CHROME_PROFILE_DIR || "./user_data_profile_puppeteer");
+const USER_DATA_DIR = config.userDataDir;
 const CRAWLER_CDP_PORT = Number(process.env.CRAWLER_CDP_PORT || 9223);
 const SYSTEM_CHROME_EXECUTABLES = [
   process.env.CRAWLER_CHROME_EXECUTABLE,
@@ -24,9 +25,9 @@ const SYSTEM_CHROME_EXECUTABLES = [
   process.env["ProgramFiles(x86)"] && path.join(process.env["ProgramFiles(x86)"], "Google", "Chrome", "Application", "chrome.exe"),
 ].filter(Boolean);
 /** 速卖通商品详情页 Cookie 存储文件 */
-const COOKIE_FILE = "./cookie.txt";
+const COOKIE_FILE = config.cookieFile;
 /** 跨境卖家中心 CSP Cookie 存储文件 */
-const CSP_COOKIE_FILE = "./cookie_csp.txt";
+const CSP_COOKIE_FILE = config.cspCookieFile;
 const STARTUP_URLS = [
   "https://www.aliexpress.com/item/1005012147729552.html",
   "https://csp.aliexpress.com/",

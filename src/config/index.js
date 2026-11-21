@@ -1,9 +1,14 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const crawlerDir = fileURLToPath(new URL("../../", import.meta.url));
+
 export const config = {
   port: process.env.PORT || 3000,
   host: process.env.CRAWLER_HOST || "127.0.0.1",
-  userDataDir: process.env.CRAWLER_CHROME_PROFILE_DIR || "./user_data_profile_puppeteer",
-  cookieFile: "./cookie.txt",
-  cspCookieFile: "./cookie_csp.txt",
+  userDataDir: path.resolve(process.env.CRAWLER_CHROME_PROFILE_DIR || path.join(crawlerDir, "user_data_profile_puppeteer")),
+  cookieFile: path.join(crawlerDir, "cookie.txt"),
+  cspCookieFile: path.join(crawlerDir, "cookie_csp.txt"),
   flaskBiddingApi: process.env.FLASK_API_BASE || "https://smtkuajingdianshang.cn/api",
   maxConcurrentTabs: Math.max(
     1,

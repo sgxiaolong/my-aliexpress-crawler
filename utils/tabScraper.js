@@ -5,9 +5,7 @@ import fs from "fs";
 import path from "path";
 import { config } from "../src/config/index.js";
 
-import { get as GetReviews } from "../libs/aliexpress-product-scraper/src/reviews.js";
-import { parseJsonp, extractDataFromApiResponse } from "../libs/aliexpress-product-scraper/src/parsers.js";
-import { buildProductJson } from "../libs/aliexpress-product-scraper/src/transform.js";
+import { getReviews, parseJsonp, extractDataFromApiResponse, buildProductJson } from "aliexpress-product-scraper";
 import { normalizeCookies, ALIEXPRESS_DOMAIN, CSP_DOMAIN } from "./cookieUtils.js";
 
 puppeteer.use(StealthPlugin());
@@ -409,7 +407,7 @@ export const scrapeWithTab = async (
     }
 
     // 并行抓取评价数据
-    const reviewsPromise = GetReviews({
+    const reviewsPromise = getReviews({
       productId: id,
       limit: reviewsCount,
       total: data.feedbackComponent?.totalValidNum || 0,
